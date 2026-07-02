@@ -8,7 +8,7 @@ app = Flask(__name__)
 
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
 # Edit this message and push to trigger the CI/CD pipeline.
-MESSAGE = "Hello from the OpenShift CI/CD demo pipeline! (v4 - auto-triggered)"
+MESSAGE = "Hello from the OpenShift CI/CD demo pipeline! (v5 - auto-triggered)"
 
 
 @app.route("/")
