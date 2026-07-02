@@ -1,0 +1,35 @@
+name: Mirror to GitLab (trigger CI)
+
+# On pushes that touch the sample app, mirror the repo to the GitLab project.
+# The push into GitLab triggers the GitLab CI/CD pipeline (build -> push image
+# -> bump tag in gitops/ -> ArgoCD deploys).
+#
+# The path filter is important: the pipeline's own "tag bump" commits only touch
+# gitops/**, so they do NOT re-trigger this workflow — that avoids a build loop.
+#
+# Repo secret required (Settings > Secrets and variables > Actions):
+#   GITLAB_PUSH_TOKEN - a GitLab token that can push to root/sample-app
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sample-app/**'
+      - '.gitlab-ci.yml'
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Push to GitLab
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_PUSH_TOKEN }}
+          GITLAB_URL: gitlab.apps.openshift-install-aws.sandbox3361.opentlc.com
+        run: |
+          git config --global http.sslVerify false
+          git push --force \
+            "https://oauth2:${GITLAB_TOKEN}@${GITLAB_URL}/root/sample-app.git" \
+            HEAD:main

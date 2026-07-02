@@ -1,0 +1,23 @@
+---
+# ArgoCD Application: watches the gitops/ path of this repo and keeps the
+# sample-app namespace in sync (auto-sync + self-heal + prune).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sample-app
+  namespace: openshift-gitops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/nsaraiya-rh/ocp-ci-cd-pipeline-demo.git
+    targetRevision: main
+    path: gitops
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sample-app
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ApplyOutOfSyncOnly=true

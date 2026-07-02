@@ -1,0 +1,12 @@
+---
+# Long-lived (non-expiring) token for the gitlab-pusher SA, used by GitLab CI
+# to log in to the internal registry. K8s 1.24+ no longer auto-creates these,
+# so we request one explicitly.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitlab-pusher-token
+  namespace: sample-app
+  annotations:
+    kubernetes.io/service-account.name: gitlab-pusher
+type: kubernetes.io/service-account-token

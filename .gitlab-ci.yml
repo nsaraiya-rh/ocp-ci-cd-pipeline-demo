@@ -1,0 +1,49 @@
+# CI/CD pipeline (runs in GitLab, mirrored from GitHub on every app change).
+#
+#   build           -> buildah builds sample-app/ and pushes the image to the
+#                      OpenShift internal registry.
+#   update-manifest -> bumps the image tag in gitops/kustomization.yaml in the
+#                      GitHub repo; ArgoCD then syncs the new tag to the cluster.
+#
+# The image tag is CI_COMMIT_SHORT_SHA in both stages (no cross-stage artifact
+# needed). Required CI/CD variables (Settings > CI/CD > Variables):
+#   REGISTRY_USER   - gitlab-pusher
+#   REGISTRY_TOKEN  - OpenShift SA token for sample-app/gitlab-pusher
+#   GITHUB_TOKEN    - nsaraiya-rh PAT with repo scope (to push the tag bump)
+
+stages:
+  - build
+  - update-manifest
+
+variables:
+  # GitLab uses a self-signed router cert; skip TLS verify for git clone.
+  GIT_SSL_NO_VERIFY: "true"
+  REGISTRY: "image-registry.openshift-image-registry.svc:5000"
+  IMAGE_REPO: "image-registry.openshift-image-registry.svc:5000/sample-app/sample-app"
+  GITOPS_REPO: "github.com/nsaraiya-rh/ocp-ci-cd-pipeline-demo.git"
+
+build-image:
+  stage: build
+  image: quay.io/buildah/stable:latest
+  variables:
+    STORAGE_DRIVER: vfs
+    BUILDAH_FORMAT: docker
+  script:
+    - cd sample-app
+    - echo "Building ${IMAGE_REPO}:${CI_COMMIT_SHORT_SHA}"
+    - buildah bud --build-arg APP_VERSION="${CI_COMMIT_SHORT_SHA}" -t "${IMAGE_REPO}:${CI_COMMIT_SHORT_SHA}" -f Dockerfile .
+    - buildah login -u "${REGISTRY_USER}" -p "${REGISTRY_TOKEN}" --tls-verify=false "${REGISTRY}"
+    - buildah push --tls-verify=false "${IMAGE_REPO}:${CI_COMMIT_SHORT_SHA}"
+
+update-manifest:
+  stage: update-manifest
+  image: registry.access.redhat.com/ubi9/ubi:latest
+  script:
+    - dnf install -y git >/dev/null
+    - git clone "https://oauth2:${GITHUB_TOKEN}@${GITOPS_REPO}" repo
+    - cd repo/gitops
+    - sed -i -E "s|(newTag:).*|\\1 \"${CI_COMMIT_SHORT_SHA}\"|" kustomization.yaml
+    - git config user.email "ci@gitlab.demo"
+    - git config user.name "GitLab CI"
+    - git commit -am "Deploy sample-app ${CI_COMMIT_SHORT_SHA} [skip ci]" || { echo "nothing to commit"; exit 0; }
+    - git push origin HEAD:main

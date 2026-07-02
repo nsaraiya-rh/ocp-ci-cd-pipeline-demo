@@ -1,0 +1,31 @@
+---
+# Namespace where the sample app runs and where its images live.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sample-app
+  labels:
+    app.kubernetes.io/part-of: cicd-demo
+---
+# Service account GitLab CI uses to push images into the internal registry.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gitlab-pusher
+  namespace: sample-app
+---
+# Allow the pusher SA to push images (create imagestreams / imagestream layers)
+# into the sample-app namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gitlab-pusher-image-builder
+  namespace: sample-app
+subjects:
+  - kind: ServiceAccount
+    name: gitlab-pusher
+    namespace: sample-app
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:image-builder

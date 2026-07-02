@@ -1,0 +1,29 @@
+# Helm values for gitlab-runner (chart 0.76.x / app 17.11).
+# Install:
+#   helm upgrade --install gitlab-runner gitlab/gitlab-runner \
+#     --version 0.76.3 -n gitlab-runner -f cicd/gitlab/03-runner-values.yaml
+#
+# The runner auth token lives in the gitlab-runner-secret Secret (key runner-token),
+# created out-of-band (not committed). Job pods run privileged so buildah can build.
+
+# Internal service URL — avoids the self-signed external cert entirely.
+gitlabUrl: http://gitlab-webservice-default.gitlab-system.svc:8080
+
+serviceAccount:
+  create: false
+  name: gitlab-runner-sa
+
+rbac:
+  create: true
+
+runners:
+  secret: gitlab-runner-secret
+  config: |
+    [[runners]]
+      [runners.kubernetes]
+        namespace = "gitlab-runner"
+        privileged = true
+        image = "registry.access.redhat.com/ubi9/ubi:latest"
+        service_account = "gitlab-runner-sa"
+        cpu_request = "200m"
+        memory_request = "512Mi"

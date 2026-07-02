@@ -1,0 +1,42 @@
+---
+# GitLab instance managed by the GitLab operator, configured for OpenShift:
+#  - bundled nginx-ingress disabled; OpenShift router serves the Ingress objects
+#    (ingress.class: none -> router takes ownership, creates Routes automatically)
+#  - self-signed wildcard TLS (gitlab-wildcard-tls); cert-manager disabled
+#  - self-signed CA added to GitLab's trust store so internal https calls verify
+#  - lean footprint: no prometheus, runner installed separately
+apiVersion: apps.gitlab.com/v1beta1
+kind: GitLab
+metadata:
+  name: gitlab
+  namespace: gitlab-system
+spec:
+  chart:
+    # 9.11.7 (GitLab 17.x) still bundles PostgreSQL, Redis, and MinIO object
+    # storage in-cluster. Chart 10.x removed them (external-only), which would
+    # require standing up separate PG/Redis/S3 — overkill for this demo.
+    version: "9.11.7"
+    values:
+      global:
+        edition: ce
+        hosts:
+          domain: apps.openshift-install-aws.sandbox3361.opentlc.com
+          https: true
+        ingress:
+          class: none
+          configureCertmanager: false
+          tls:
+            secretName: gitlab-wildcard-tls
+          annotations:
+            route.openshift.io/termination: edge
+        certificates:
+          customCAs:
+            - secret: gitlab-selfsigned-ca
+      certmanager:
+        install: false
+      nginx-ingress:
+        enabled: false
+      prometheus:
+        install: false
+      gitlab-runner:
+        install: false
