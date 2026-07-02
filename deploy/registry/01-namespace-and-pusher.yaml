@@ -6,6 +6,9 @@ metadata:
   name: sample-app
   labels:
     app.kubernetes.io/part-of: cicd-demo
+    # Lets the openshift-gitops ArgoCD instance manage resources in this namespace
+    # (operator creates the required RBAC).
+    argocd.argoproj.io/managed-by: openshift-gitops
 ---
 # Service account GitLab CI uses to push images into the internal registry.
 apiVersion: v1
