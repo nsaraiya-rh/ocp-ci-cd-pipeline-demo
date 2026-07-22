@@ -4,6 +4,9 @@ End-to-end GitOps CI/CD on OpenShift using **GitLab** (CI), **ArgoCD / OpenShift
 GitOps** (CD), the **OpenShift internal registry** (images), and **GitHub** as
 the source of truth.
 
+> **Deploying to a cluster?** Run `./install.sh` — see **[INSTALL.md](INSTALL.md)**.
+> It provisions everything below on any OpenShift cluster (nothing is hardcoded).
+
 ## Flow
 
 ```

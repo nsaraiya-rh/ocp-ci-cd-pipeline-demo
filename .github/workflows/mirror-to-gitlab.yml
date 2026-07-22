@@ -7,8 +7,9 @@ name: Mirror to GitLab (trigger CI)
 # The path filter is important: the pipeline's own "tag bump" commits only touch
 # gitops/**, so they do NOT re-trigger this workflow — that avoids a build loop.
 #
-# Repo secret required (Settings > Secrets and variables > Actions):
-#   GITLAB_PUSH_TOKEN - a GitLab token that can push to root/sample-app
+# Required (Settings > Secrets and variables > Actions) — both set by install.sh:
+#   secret   GITLAB_PUSH_TOKEN - a GitLab token that can push to root/sample-app
+#   variable GITLAB_URL        - GitLab host, e.g. gitlab.apps.<cluster-domain>
 
 on:
   push:
@@ -27,7 +28,9 @@ jobs:
       - name: Push to GitLab
         env:
           GITLAB_TOKEN: ${{ secrets.GITLAB_PUSH_TOKEN }}
-          GITLAB_URL: gitlab.apps.openshift-install-aws.sandbox3361.opentlc.com
+          # Actions *variable* (not secret) so re-provisioning onto a new cluster
+          # needs no code change — install.sh sets it to the new GitLab host.
+          GITLAB_URL: ${{ vars.GITLAB_URL }}
         run: |
           git config --global http.sslVerify false
           git push --force \

@@ -3,3 +3,9 @@
 *.key
 *.pem
 secrets/
+
+# install.sh output: generated certs + credentials
+.install-output/
+
+# macOS
+.DS_Store

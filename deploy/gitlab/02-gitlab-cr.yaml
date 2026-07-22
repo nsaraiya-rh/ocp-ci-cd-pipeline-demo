@@ -20,7 +20,9 @@ spec:
       global:
         edition: ce
         hosts:
-          domain: apps.openshift-install-aws.sandbox3361.opentlc.com
+          # Substituted by install.sh with the cluster's actual apps domain
+          # (oc get ingresses.config/cluster -o jsonpath='{.spec.domain}').
+          domain: __APPS_DOMAIN__
           https: true
         ingress:
           class: none
