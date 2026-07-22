@@ -237,6 +237,29 @@ oc apply -f "${REPO_DIR}/deploy/argocd/02-sample-app-application.yaml" >/dev/nul
 oc annotate application sample-app -n openshift-gitops argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
 ok "ArgoCD Application applied"
 
+# GitHub -> ArgoCD push webhook, so a gitops commit syncs immediately instead of
+# waiting out ArgoCD's 3-minute polling interval (timeout.reconciliation).
+# insecure_ssl=1 because the route uses the cluster's self-signed router cert.
+WEBHOOK_SECRET="$(openssl rand -hex 20)"
+oc patch secret argocd-secret -n openshift-gitops --type merge \
+  -p "{\"stringData\":{\"webhook.github.secret\":\"${WEBHOOK_SECRET}\"}}" >/dev/null 2>&1
+oc rollout restart deploy/openshift-gitops-server -n openshift-gitops >/dev/null 2>&1
+oc rollout status deploy/openshift-gitops-server -n openshift-gitops --timeout=120s >/dev/null 2>&1
+HOOK_URL="https://${ARGO_HOST}/api/webhook"
+for id in $(curl -s -H "Authorization: token ${GH_PAT}" "https://api.github.com/repos/${GITHUB_REPO}/hooks" \
+            | python3 -c "import sys,json;[print(h['id']) for h in json.load(sys.stdin) if h.get('config',{}).get('url','').endswith('/api/webhook')]" 2>/dev/null); do
+  curl -s -X DELETE -H "Authorization: token ${GH_PAT}" \
+    "https://api.github.com/repos/${GITHUB_REPO}/hooks/${id}" >/dev/null 2>&1
+done
+if curl -sf -X POST -H "Authorization: token ${GH_PAT}" \
+     "https://api.github.com/repos/${GITHUB_REPO}/hooks" \
+     -d "{\"name\":\"web\",\"active\":true,\"events\":[\"push\"],\"config\":{\"url\":\"${HOOK_URL}\",\"content_type\":\"json\",\"secret\":\"${WEBHOOK_SECRET}\",\"insecure_ssl\":\"1\"}}" \
+     >/dev/null 2>&1; then
+  ok "GitHub -> ArgoCD webhook created (instant sync)"
+else
+  warn "could not create ArgoCD webhook — ArgoCD will still poll every 3 min"
+fi
+
 # --------------------------------------------------------------- summary ----
 cat > "${OUT_DIR}/credentials.txt" <<EOF
 # Generated $(date). KEEP THIS FILE - these cannot be recovered later.
@@ -246,6 +269,7 @@ APPS_DOMAIN=${APPS_DOMAIN}
 ARGOCD_URL=https://${ARGO_HOST}
 ARGOCD_USER=admin
 ARGOCD_PASSWORD=${ARGO_PW}
+ARGOCD_WEBHOOK_SECRET=${WEBHOOK_SECRET}
 
 GITLAB_URL=${GITLAB_URL}
 GITLAB_USER=root

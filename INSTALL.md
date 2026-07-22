@@ -42,7 +42,19 @@ It is **idempotent** — safe to re-run if a step fails.
 | 6 | GitLab root PAT (rails console) + instance runner registration |
 | 7 | GitLab Runner (Helm 0.76.3), Kubernetes executor, **privileged** SCC for buildah |
 | 8 | GitLab project `root/sample-app`, unprotect `main`, CI variables |
-| 9 | GitHub `GITLAB_PUSH_TOKEN` secret + `GITLAB_URL` variable, ArgoCD Application |
+| 9 | GitHub `GITLAB_PUSH_TOKEN` secret + `GITLAB_URL` variable, ArgoCD Application, and a GitHub→ArgoCD push webhook |
+
+### ArgoCD sync behaviour
+
+The Application uses `syncPolicy.automated` with `prune` and `selfHeal`, so it
+deploys without manual intervention. By default ArgoCD only *notices* new commits
+when it polls (`timeout.reconciliation`, 180s), so step 9 also registers a GitHub
+push webhook to `https://<argocd-host>/api/webhook` — gitops commits then sync in
+seconds instead of up to 3 minutes.
+
+The webhook is created with `insecure_ssl: 1` because the ArgoCD route uses the
+cluster's self-signed router certificate. The shared secret is stored in the
+`argocd-secret` Secret under `webhook.github.secret` (and in `credentials.txt`).
 
 ## Credentials
 
