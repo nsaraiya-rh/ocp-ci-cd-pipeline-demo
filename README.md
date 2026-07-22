@@ -47,8 +47,8 @@ Developer ── push (sample-app/**) ──▶ GitHub (this repo)
 | Component | How |
 |-----------|-----|
 | ArgoCD | OpenShift GitOps operator (`openshift-gitops` namespace) |
-| GitLab | GitLab operator, chart 9.11.7 (GitLab 17.x), self-signed TLS via OpenShift Routes at `gitlab.apps.<domain>` |
-| GitLab Runner | Helm chart 0.76.x, Kubernetes executor, privileged (buildah) |
+| GitLab | Helm chart 9.11.8 (GitLab 18.11), self-signed TLS via OpenShift Routes at `gitlab.apps.<domain>`. Needs the custom `gitlab-anyuid` SCC. |
+| GitLab Runner | Helm chart 0.88.x, Kubernetes executor, privileged (buildah) |
 | Image registry | OpenShift internal registry; images at `image-registry.openshift-image-registry.svc:5000/sample-app/sample-app` |
 
 ## Required secrets / variables

@@ -1,0 +1,51 @@
+# Helm values for the GitLab chart, configured for OpenShift.
+#
+# Installed by install.sh:
+#   helm upgrade --install gitlab gitlab/gitlab --version 9.11.8 \
+#     -n gitlab-system -f <rendered copy of this file>
+#
+# Why Helm and not the GitLab operator: as of 2026-07 the operator (v3.2.0, the
+# only version in both the community and certified catalogs) bundles ONLY chart
+# 10.x, which dropped the in-cluster PostgreSQL/Redis/MinIO and requires you to
+# supply them externally. Chart 9.11.x is still published on charts.gitlab.io and
+# still bundles all three — far simpler for a demo, and immune to catalog drift.
+#
+# OpenShift specifics:
+#   - bundled nginx-ingress disabled; ingress.class "none" makes the OpenShift
+#     router take ownership of the Ingress objects and create Routes for them
+#   - self-signed wildcard TLS (gitlab-wildcard-tls), cert-manager disabled
+#   - the self-signed CA is added to GitLab's trust store so internal https works
+
+global:
+  edition: ce
+  hosts:
+    # Substituted by install.sh with the cluster's apps domain.
+    domain: __APPS_DOMAIN__
+    https: true
+  ingress:
+    class: none
+    configureCertmanager: false
+    tls:
+      secretName: gitlab-wildcard-tls
+    annotations:
+      route.openshift.io/termination: edge
+  certificates:
+    customCAs:
+      - secret: gitlab-selfsigned-ca
+
+# No cert-manager: we bring our own (self-signed) certificate.
+installCertmanager: false
+certmanager:
+  install: false
+
+# The OpenShift router serves ingress; no bundled controller needed.
+nginx-ingress:
+  enabled: false
+
+# Trim the footprint — not needed for the demo.
+prometheus:
+  install: false
+
+# The runner is installed separately (privileged, for buildah).
+gitlab-runner:
+  install: false

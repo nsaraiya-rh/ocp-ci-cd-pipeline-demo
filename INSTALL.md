@@ -36,9 +36,9 @@ It is **idempotent** — safe to re-run if a step fails.
 |---|---|
 | 1 | OpenShift GitOps operator → ArgoCD |
 | 2 | `sample-app` namespace, `gitlab-pusher` SA (+ `system:image-builder`), long-lived token, imagestream, registry route |
-| 3 | GitLab operator + CRD |
+| 3 | `gitlab-system` namespace, custom `gitlab-anyuid` SCC, Helm repo |
 | 4 | Self-signed CA + wildcard cert for `*.<apps-domain>` → TLS secrets |
-| 5 | `GitLab` CR (chart 9.11.7) exposed via OpenShift Routes |
+| 5 | GitLab via **Helm** (chart 9.11.8 / GitLab 18.11) exposed via OpenShift Routes |
 | 6 | GitLab root PAT (rails console) + instance runner registration |
 | 7 | GitLab Runner (Helm 0.76.3), Kubernetes executor, **privileged** SCC for buildah |
 | 8 | GitLab project `root/sample-app`, unprotect `main`, CI variables |
@@ -80,3 +80,5 @@ Watch it flow:
 | Action didn't trigger | The commit that *adds* a workflow often doesn't run it; push once more. Also the path filter only matches `sample-app/**`. |
 | ArgoCD `OutOfSync`, RBAC forbidden | Namespace needs `argocd.argoproj.io/managed-by=openshift-gitops` (already in the manifest). |
 | GitLab webservice never ready | Check `oc get pods -n gitlab-system`; usually resource pressure or the migrations job. |
+| `shared-secrets` job stuck, `FailedCreate ... forbidden` | The `gitlab-anyuid` SCC isn't bound. GitLab runs pods as UID 65534 **and** sets legacy seccomp annotations, so neither `restricted-v2` nor built-in `anyuid` accepts them. `install.sh` applies `deploy/gitlab/00-scc-gitlab-anyuid.yaml` and binds it to `system:serviceaccounts:gitlab-system`. |
+| Helm `failed pre-install: timed out` | Same SCC issue above — the hook pod could never be created. Fix the SCC, `helm uninstall gitlab -n gitlab-system`, re-run. |

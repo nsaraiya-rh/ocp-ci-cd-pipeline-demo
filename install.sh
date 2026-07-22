@@ -17,8 +17,8 @@ set -euo pipefail
 
 # ---------------------------------------------------------------- config ----
 GITHUB_REPO="${GITHUB_REPO:-nsaraiya-rh/ocp-ci-cd-pipeline-demo}"
-GITLAB_CHART_VERSION="${GITLAB_CHART_VERSION:-9.11.7}"   # 10.x drops bundled PG/Redis/MinIO
-RUNNER_CHART_VERSION="${RUNNER_CHART_VERSION:-0.76.3}"   # match GitLab 17.x
+GITLAB_CHART_VERSION="${GITLAB_CHART_VERSION:-9.11.8}"   # 10.x drops bundled PG/Redis/MinIO
+RUNNER_CHART_VERSION="${RUNNER_CHART_VERSION:-0.88.4}"   # match GitLab 18.11
 APP_NS="sample-app"
 GITLAB_NS="gitlab-system"
 RUNNER_NS="gitlab-runner"
@@ -91,15 +91,21 @@ done; echo
 ok "namespace ${APP_NS} + gitlab-pusher token ready"
 
 # --------------------------------------------------------------- 3 GitLab ---
-log "3/9  GitLab operator"
-oc apply -f "${REPO_DIR}/deploy/gitlab/01-operator-subscription.yaml" >/dev/null
-printf '    waiting for operator + CRD'
-for _ in $(seq 1 60); do
-  oc get crd gitlabs.apps.gitlab.com >/dev/null 2>&1 && break
-  printf '.'; sleep 10
-done; echo
-oc get crd gitlabs.apps.gitlab.com >/dev/null 2>&1 || die "GitLab CRD never appeared"
-ok "GitLab operator ready"
+# NOTE: we install GitLab with Helm, not the GitLab operator. The only operator
+# version in the catalogs (v3.2.0) bundles chart 10.x, which removed the
+# in-cluster PostgreSQL/Redis/MinIO. Chart 9.11.x still bundles them.
+log "3/9  GitLab namespace + Helm repo"
+oc create namespace "$GITLAB_NS" --dry-run=client -o yaml | oc apply -f - >/dev/null
+# GitLab's pods use fixed UIDs (65534 for the shared-secrets hook) AND set the
+# legacy seccomp.security.alpha.kubernetes.io annotations. restricted-v2 rejects
+# the UID; the built-in anyuid rejects the seccomp annotation. So we ship a custom
+# SCC (anyuid + seccomp allowed) and bind it to this namespace's service accounts.
+# The GitLab operator used to handle this; a plain Helm install does not.
+oc apply -f "${REPO_DIR}/deploy/gitlab/00-scc-gitlab-anyuid.yaml" >/dev/null
+oc adm policy add-scc-to-group gitlab-anyuid "system:serviceaccounts:${GITLAB_NS}" >/dev/null
+helm repo add gitlab https://charts.gitlab.io >/dev/null 2>&1 || true
+helm repo update >/dev/null 2>&1
+ok "namespace ${GITLAB_NS} ready (anyuid granted), gitlab helm repo added"
 
 log "4/9  Self-signed TLS for *.${APPS_DOMAIN}"
 CERT_DIR="${OUT_DIR}/certs"; mkdir -p "$CERT_DIR"
@@ -124,11 +130,13 @@ oc create secret generic gitlab-selfsigned-ca -n "$GITLAB_NS" \
   --dry-run=client -o yaml | oc apply -f - >/dev/null
 ok "TLS + CA secrets created"
 
-log "5/9  GitLab instance (chart ${GITLAB_CHART_VERSION}) — this takes ~10-20 min"
+log "5/9  GitLab (Helm chart ${GITLAB_CHART_VERSION}) — this takes ~10-20 min"
 sed -e "s|__APPS_DOMAIN__|${APPS_DOMAIN}|g" \
-    -e "s|version: \"[0-9.]*\"|version: \"${GITLAB_CHART_VERSION}\"|" \
-    "${REPO_DIR}/deploy/gitlab/02-gitlab-cr.yaml" > "${OUT_DIR}/gitlab-cr.rendered.yaml"
-oc apply -f "${OUT_DIR}/gitlab-cr.rendered.yaml" >/dev/null
+    "${REPO_DIR}/deploy/gitlab/02-gitlab-values.yaml" > "${OUT_DIR}/gitlab-values.rendered.yaml"
+helm upgrade --install gitlab gitlab/gitlab \
+  --version "$GITLAB_CHART_VERSION" -n "$GITLAB_NS" \
+  -f "${OUT_DIR}/gitlab-values.rendered.yaml" \
+  --timeout 15m >/dev/null
 printf '    waiting for gitlab webservice'
 for _ in $(seq 1 150); do
   [[ "$(oc get deploy -n "$GITLAB_NS" -l app=webservice \
