@@ -23,7 +23,7 @@ def index():
       <li><b>Pod:</b> {socket.gethostname()}</li>
       <li><b>Served at:</b> {datetime.now(timezone.utc).isoformat()}</li>
     </ul>
-    <p>Built by GitLab CI, deployed by ArgoCD.</p>
+    <p>Testing: Built by GitLab CI, deployed by ArgoCD.</p>
   </body>
 </html>"""
 
