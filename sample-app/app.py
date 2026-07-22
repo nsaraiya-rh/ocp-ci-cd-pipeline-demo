@@ -8,7 +8,7 @@ app = Flask(__name__)
 
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
 # Edit this message and push to trigger the CI/CD pipeline.
-MESSAGE = "Hello from the OpenShift CI/CD demo pipeline! (v5 - auto-triggered)"
+MESSAGE = "Testing: Hello from the OpenShift CI/CD demo pipeline! (v5 - auto-triggered)"
 
 
 @app.route("/")
@@ -23,7 +23,7 @@ def index():
       <li><b>Pod:</b> {socket.gethostname()}</li>
       <li><b>Served at:</b> {datetime.now(timezone.utc).isoformat()}</li>
     </ul>
-    <p>Testing: Built by GitLab CI, deployed by ArgoCD.</p>
+    <p>Built by GitLab CI, deployed by ArgoCD.</p>
   </body>
 </html>"""
 
