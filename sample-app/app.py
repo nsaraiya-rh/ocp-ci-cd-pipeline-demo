@@ -8,7 +8,7 @@ app = Flask(__name__)
 
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
 # Edit this message and push to trigger the CI/CD pipeline.
-MESSAGE = "Testing: Hello from the OpenShift CI/CD demo pipeline! (v6 - webhook instant sync)"
+MESSAGE = "Testing CI CD pipeline. Hello from the OpenShift CI/CD demo pipeline! (v6 - webhook instant sync)"
 
 
 @app.route("/")
