@@ -12,4 +12,4 @@ resources:
 images:
   - name: sample-app-image
     newName: image-registry.openshift-image-registry.svc:5000/sample-app/sample-app
-    newTag: "f0480f90"
+    newTag: "28b3cb7c"
