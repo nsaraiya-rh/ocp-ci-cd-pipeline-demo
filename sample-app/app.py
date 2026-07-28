@@ -8,7 +8,7 @@ app = Flask(__name__)
 
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
 # Edit this message and push to trigger the CI/CD pipeline.
-MESSAGE = "Live on sandbox2381 — end-to-end verification"
+MESSAGE = "Testing Live on sandbox2381 — end-to-end verification"
 
 
 @app.route("/")
