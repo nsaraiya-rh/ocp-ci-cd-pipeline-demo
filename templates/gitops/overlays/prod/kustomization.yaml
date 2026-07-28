@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Prod environment. NOT auto-synced.
+# Promotion = MR in this repo changing `newTag` below (typically to whatever
+# is currently deployed to dev). MR is reviewed + approved, then merged; the
+# ArgoCD prod Application then syncs on demand (or automatically once the
+# sync policy is flipped on).
+
+namespace: sample-app-prod
+
+resources:
+  - ../../base
+
+commonLabels:
+  app.kubernetes.io/instance: sample-app-prod
+  app.kubernetes.io/managed-by: argocd
+
+# Prod runs an extra replica.
+replicas:
+  - name: sample-app
+    count: 3
+
+images:
+  - name: sample-app-image
+    # Replaced by install.sh with the actual JFrog registry path.
+    newName: __IMAGE_REPO__
+    newTag: "initial"

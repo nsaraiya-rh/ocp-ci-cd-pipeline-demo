@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Dev environment. Auto-synced by ArgoCD.
+# The sample-app CI bumps `newTag` on every merge to main in the app repo.
+
+namespace: sample-app-dev
+
+resources:
+  - ../../base
+
+commonLabels:
+  app.kubernetes.io/instance: sample-app-dev
+  app.kubernetes.io/managed-by: argocd
+
+images:
+  - name: sample-app-image
+    # Replaced by install.sh with the actual JFrog registry path.
+    newName: __IMAGE_REPO__
+    newTag: "initial"

@@ -1,0 +1,62 @@
+# CI/CD pipeline for sample-app.
+#
+#   build-image      -> buildah builds the image, pushes to JFrog Artifactory
+#                       tagged with the git commit short SHA.
+#   update-manifest  -> clones the sample-app-gitops project and bumps
+#                       overlays/dev/kustomization.yaml newTag. ArgoCD then
+#                       auto-syncs the dev environment.
+#
+# Promotion to prod is done by a MR in sample-app-gitops that changes
+# overlays/prod/kustomization.yaml newTag. NOT automated here.
+#
+# CI/CD variables required (set by install.sh; visible under Settings > CI/CD):
+#   JFROG_URL              e.g. company.jfrog.io      (host only, no protocol)
+#   JFROG_REPO             e.g. docker-local          (Docker repo name)
+#   JFROG_USER             JFrog identity (email/user)
+#   JFROG_TOKEN            JFrog access token (masked, protected)
+#   GITOPS_DEPLOY_TOKEN    GitLab deploy token on sample-app-gitops with
+#                          write_repository scope (masked, protected)
+#   GITOPS_PROJECT_URL     e.g. gitlab.example.com/root/sample-app-gitops
+#                          (host + path, no scheme, no .git)
+
+stages:
+  - build
+  - update-manifest
+
+variables:
+  # GitLab uses a self-signed router cert in the demo cluster; skip verify for git.
+  GIT_SSL_NO_VERIFY: "true"
+  IMAGE: "${JFROG_URL}/${JFROG_REPO}/sample-app"
+
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_COMMIT_MESSAGE !~ /\[skip ci\]/'
+
+build-image:
+  stage: build
+  image: quay.io/buildah/stable:latest
+  variables:
+    STORAGE_DRIVER: vfs
+    BUILDAH_FORMAT: docker
+  script:
+    - echo "Building ${IMAGE}:${CI_COMMIT_SHORT_SHA}"
+    - buildah bud
+        --build-arg APP_VERSION="${CI_COMMIT_SHORT_SHA}"
+        -t "${IMAGE}:${CI_COMMIT_SHORT_SHA}"
+        -f Dockerfile .
+    - buildah login -u "${JFROG_USER}" -p "${JFROG_TOKEN}" "${JFROG_URL}"
+    - buildah push "${IMAGE}:${CI_COMMIT_SHORT_SHA}"
+
+update-manifest:
+  stage: update-manifest
+  image: registry.access.redhat.com/ubi9/ubi:latest
+  variables:
+    GIT_STRATEGY: none          # nothing to fetch from THIS repo; we'll clone gitops directly
+  script:
+    - dnf install -y git >/dev/null
+    - git clone "https://oauth2:${GITOPS_DEPLOY_TOKEN}@${GITOPS_PROJECT_URL}.git" repo
+    - cd repo/overlays/dev
+    - sed -i -E "s|(newTag:).*|\\1 \"${CI_COMMIT_SHORT_SHA}\"|" kustomization.yaml
+    - git config user.email "ci@gitlab.demo" && git config user.name "GitLab CI"
+    - git commit -am "dev: bump sample-app to ${CI_COMMIT_SHORT_SHA} [skip ci]" || exit 0
+    - git push origin HEAD:main

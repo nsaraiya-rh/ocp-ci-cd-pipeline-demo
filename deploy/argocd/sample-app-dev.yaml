@@ -1,0 +1,26 @@
+---
+# ArgoCD Application: dev environment.
+# Auto-syncs from GitLab sample-app-gitops repo, overlays/dev path.
+# CI in sample-app bumps the image tag here on every merge to main.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sample-app-dev
+  namespace: openshift-gitops
+spec:
+  project: default
+  source:
+    # Substituted by install.sh with the actual GitLab host.
+    repoURL: https://__GITLAB_HOST__/root/sample-app-gitops.git
+    targetRevision: main
+    path: overlays/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sample-app-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true

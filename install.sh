@@ -1,30 +1,40 @@
 #!/usr/bin/env bash
 #
-# Bootstrap the whole CI/CD GitOps demo onto a fresh OpenShift cluster.
+# One-command bootstrap of the CI/CD demo on an OpenShift cluster.
 #
-#   ArgoCD (OpenShift GitOps) + GitLab (operator) + GitLab Runner (buildah)
-#   + OpenShift internal registry + the sample-app pipeline.
+#   Deploys: OpenShift GitOps (ArgoCD), in-cluster GitLab, GitLab Runner,
+#            a self-signed wildcard TLS cert, two GitLab projects seeded from
+#            templates/, a JFrog pull secret in dev + prod namespaces, and
+#            two ArgoCD Applications (dev auto-sync, prod manual-sync).
+#
+#   Registry: JFrog Artifactory Cloud (credentials from a local file).
 #
 # Usage:
-#   export GH_PAT=ghp_xxx          # GitHub PAT, scopes: repo + workflow
 #   oc login --token=... --server=https://api.<cluster>:6443
+#   export JFROG_CREDS_FILE=~/.config/ocp-clusters/jfrog-creds.txt   # optional; default shown
 #   ./install.sh
 #
 # Idempotent: safe to re-run. Generated credentials are written to
-# .install-output/credentials.txt (gitignored) so they are never lost.
+# .install-output/credentials.txt (mode 600, gitignored).
+#
+# Version: v2 — GitLab-as-source-of-truth, JFrog registry, dev+prod overlays.
 
 set -euo pipefail
 
 # ---------------------------------------------------------------- config ----
-GITHUB_REPO="${GITHUB_REPO:-nsaraiya-rh/ocp-ci-cd-pipeline-demo}"
-GITLAB_CHART_VERSION="${GITLAB_CHART_VERSION:-9.11.8}"   # 10.x drops bundled PG/Redis/MinIO
-RUNNER_CHART_VERSION="${RUNNER_CHART_VERSION:-0.88.4}"   # match GitLab 18.11
-APP_NS="sample-app"
+GITLAB_CHART_VERSION="${GITLAB_CHART_VERSION:-9.11.8}"   # bundles PG/Redis/MinIO
+RUNNER_CHART_VERSION="${RUNNER_CHART_VERSION:-0.88.4}"   # matches GitLab 18.11
 GITLAB_NS="gitlab-system"
 RUNNER_NS="gitlab-runner"
-GITLAB_PROJECT="sample-app"
-OUT_DIR="$(cd "$(dirname "$0")" && pwd)/.install-output"
+APP_PROJECT="sample-app"
+GITOPS_PROJECT="sample-app-gitops"
+DEV_NS="sample-app-dev"
+PROD_NS="sample-app-prod"
+
+JFROG_CREDS_FILE="${JFROG_CREDS_FILE:-$HOME/.config/ocp-clusters/jfrog-creds.txt}"
+
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+OUT_DIR="${REPO_DIR}/.install-output"
 
 log()  { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 ok()   { printf '    \033[0;32m✓\033[0m %s\n' "$*"; }
@@ -36,19 +46,28 @@ log "Preflight"
 command -v oc   >/dev/null || die "oc not found in PATH"
 command -v helm >/dev/null || die "helm not found in PATH"
 command -v git  >/dev/null || die "git not found in PATH"
-[[ -n "${GH_PAT:-}" ]] || die "GH_PAT not set (GitHub PAT with 'repo' + 'workflow' scopes)"
 
 oc whoami >/dev/null 2>&1 || die "not logged in to a cluster (use 'oc login')"
 oc auth can-i create clusterrolebinding >/dev/null 2>&1 \
   || die "current user lacks cluster-admin"
 ok "logged in as $(oc whoami) @ $(oc whoami --show-server)"
 
+[[ -f "$JFROG_CREDS_FILE" ]] || die "JFrog creds file not found: $JFROG_CREDS_FILE"
+# shellcheck disable=SC1090
+source "$JFROG_CREDS_FILE"
+: "${JFROG_URL:?not set in $JFROG_CREDS_FILE}"
+: "${JFROG_REPO:?not set in $JFROG_CREDS_FILE}"
+: "${JFROG_USER:?not set in $JFROG_CREDS_FILE}"
+: "${JFROG_TOKEN:?not set in $JFROG_CREDS_FILE}"
+IMAGE_REPO="${JFROG_URL}/${JFROG_REPO}/sample-app"
+ok "JFrog: ${JFROG_URL}/${JFROG_REPO} (user: ${JFROG_USER})"
+
 APPS_DOMAIN="$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')"
 [[ -n "$APPS_DOMAIN" ]] || die "could not detect cluster apps domain"
 GITLAB_HOST="gitlab.${APPS_DOMAIN}"
 GITLAB_URL="https://${GITLAB_HOST}"
-ok "apps domain: ${APPS_DOMAIN}"
-ok "GitLab will be at: ${GITLAB_URL}"
+ok "apps domain : ${APPS_DOMAIN}"
+ok "GitLab      : ${GITLAB_URL}"
 
 mkdir -p "$OUT_DIR"; chmod 700 "$OUT_DIR"
 
@@ -65,48 +84,40 @@ oc get csv -n openshift-operators 2>/dev/null | grep -qi 'gitops.*Succeeded' \
 printf '    waiting for argocd server'
 for _ in $(seq 1 60); do
   [[ "$(oc get deploy openshift-gitops-server -n openshift-gitops \
-        -o jsonpath='{.status.availableReplicas}' 2>/dev/null)" == "1" ]] && break
+        -o jsonpath='{.status.availableReplicas}' 2>/dev/null)" -ge 1 ]] 2>/dev/null && break
   printf '.'; sleep 10
 done; echo
 ARGO_HOST="$(oc get route openshift-gitops-server -n openshift-gitops -o jsonpath='{.spec.host}' 2>/dev/null || true)"
 ARGO_PW="$(oc get secret openshift-gitops-cluster -n openshift-gitops -o jsonpath='{.data.admin\.password}' 2>/dev/null | base64 -d || true)"
-ok "ArgoCD ready: https://${ARGO_HOST}"
+ok "ArgoCD: https://${ARGO_HOST}"
 
-# ------------------------------------------------- 2 namespace + registry ---
-log "2/9  App namespace, image-push service account"
-oc apply -f "${REPO_DIR}/deploy/registry/01-namespace-and-pusher.yaml" >/dev/null
-oc apply -f "${REPO_DIR}/deploy/registry/02-pusher-token.yaml" >/dev/null
-oc create imagestream "$APP_NS" -n "$APP_NS" --dry-run=client -o yaml | oc apply -f - >/dev/null
-oc patch configs.imageregistry.operator.openshift.io/cluster --type merge \
-  -p '{"spec":{"defaultRoute":true}}' >/dev/null 2>&1 || warn "could not enable registry default route"
-
-printf '    waiting for pusher token'
-PUSHER_TOKEN=""
-for _ in $(seq 1 20); do
-  PUSHER_TOKEN="$(oc get secret gitlab-pusher-token -n "$APP_NS" -o jsonpath='{.data.token}' 2>/dev/null | base64 -d || true)"
-  [[ -n "$PUSHER_TOKEN" ]] && break
-  printf '.'; sleep 3
-done; echo
-[[ -n "$PUSHER_TOKEN" ]] || die "pusher SA token was not populated"
-ok "namespace ${APP_NS} + gitlab-pusher token ready"
+# ------------------------------------------ 2 app namespaces + pull secrets ---
+log "2/9  App namespaces (dev + prod) with JFrog pull secrets"
+for ns in "$DEV_NS" "$PROD_NS"; do
+  oc create namespace "$ns" --dry-run=client -o yaml | oc apply -f - >/dev/null
+  # Let openshift-gitops ArgoCD manage resources in this namespace
+  oc label namespace "$ns" argocd.argoproj.io/managed-by=openshift-gitops --overwrite >/dev/null
+  oc create secret docker-registry jfrog-pull -n "$ns" \
+    --docker-server="$JFROG_URL" \
+    --docker-username="$JFROG_USER" \
+    --docker-password="$JFROG_TOKEN" \
+    --docker-email="$JFROG_USER" \
+    --dry-run=client -o yaml | oc apply -f - >/dev/null
+  ok "namespace ${ns} + jfrog-pull secret ready"
+done
 
 # --------------------------------------------------------------- 3 GitLab ---
-# NOTE: we install GitLab with Helm, not the GitLab operator. The only operator
-# version in the catalogs (v3.2.0) bundles chart 10.x, which removed the
-# in-cluster PostgreSQL/Redis/MinIO. Chart 9.11.x still bundles them.
-log "3/9  GitLab namespace + Helm repo"
+log "3/9  GitLab namespace + custom SCC + Helm repo"
 oc create namespace "$GITLAB_NS" --dry-run=client -o yaml | oc apply -f - >/dev/null
-# GitLab's pods use fixed UIDs (65534 for the shared-secrets hook) AND set the
-# legacy seccomp.security.alpha.kubernetes.io annotations. restricted-v2 rejects
-# the UID; the built-in anyuid rejects the seccomp annotation. So we ship a custom
-# SCC (anyuid + seccomp allowed) and bind it to this namespace's service accounts.
-# The GitLab operator used to handle this; a plain Helm install does not.
+# GitLab pods run as UID 65534 AND set legacy seccomp annotations —
+# restricted-v2 rejects the UID, built-in anyuid rejects the seccomp annotation.
 oc apply -f "${REPO_DIR}/deploy/gitlab/00-scc-gitlab-anyuid.yaml" >/dev/null
 oc adm policy add-scc-to-group gitlab-anyuid "system:serviceaccounts:${GITLAB_NS}" >/dev/null
 helm repo add gitlab https://charts.gitlab.io >/dev/null 2>&1 || true
 helm repo update >/dev/null 2>&1
-ok "namespace ${GITLAB_NS} ready (anyuid granted), gitlab helm repo added"
+ok "namespace ${GITLAB_NS} ready, gitlab-anyuid SCC bound, helm repo added"
 
+# --------------------------------------------------- 4 self-signed TLS ------
 log "4/9  Self-signed TLS for *.${APPS_DOMAIN}"
 CERT_DIR="${OUT_DIR}/certs"; mkdir -p "$CERT_DIR"
 if [[ ! -f "${CERT_DIR}/tls.crt" ]]; then
@@ -128,20 +139,18 @@ oc create secret tls gitlab-wildcard-tls -n "$GITLAB_NS" \
 oc create secret generic gitlab-selfsigned-ca -n "$GITLAB_NS" \
   --from-file=gitlab-demo-ca.crt="${CERT_DIR}/ca.crt" \
   --dry-run=client -o yaml | oc apply -f - >/dev/null
-ok "TLS + CA secrets created"
+ok "TLS + CA secrets in $GITLAB_NS"
 
-log "5/9  GitLab (Helm chart ${GITLAB_CHART_VERSION}) — this takes ~10-20 min"
+# ---------------------------------------------------------- 5 GitLab install ---
+log "5/9  GitLab (Helm chart ${GITLAB_CHART_VERSION}) — takes ~10-20 min on first run"
 sed -e "s|__APPS_DOMAIN__|${APPS_DOMAIN}|g" \
     "${REPO_DIR}/deploy/gitlab/02-gitlab-values.yaml" > "${OUT_DIR}/gitlab-values.rendered.yaml"
 helm upgrade --install gitlab gitlab/gitlab \
   --version "$GITLAB_CHART_VERSION" -n "$GITLAB_NS" \
   -f "${OUT_DIR}/gitlab-values.rendered.yaml" \
-  --timeout 15m >/dev/null
+  --timeout 20m >/dev/null
 printf '    waiting for gitlab webservice'
-# Use jsonpath to sum readyReplicas; break as soon as >=1. Previous check
-# `== *1*` glob-matched the STRING "1", which missed when replicas jumped
-# straight to 2 (e.g. on a helm-upgrade no-op that never scaled through 1).
-for _ in $(seq 1 225); do   # 225 * 12s = 45 min (some clusters need it)
+for _ in $(seq 1 225); do   # 225*12s = 45 min upper bound
   ready=$(oc get deploy -n "$GITLAB_NS" -l app=webservice \
           -o jsonpath='{.items[0].status.readyReplicas}' 2>/dev/null)
   [[ -n "$ready" && "$ready" -ge 1 ]] && break
@@ -150,43 +159,49 @@ done; echo
 ready=$(oc get deploy -n "$GITLAB_NS" -l app=webservice \
         -o jsonpath='{.items[0].status.readyReplicas}' 2>/dev/null)
 [[ -n "$ready" && "$ready" -ge 1 ]] \
-  || die "GitLab webservice never became available (check: oc get pods -n ${GITLAB_NS})"
+  || die "GitLab webservice never became available (oc get pods -n ${GITLAB_NS})"
 GITLAB_ROOT_PW="$(oc get secret gitlab-gitlab-initial-root-password -n "$GITLAB_NS" -o jsonpath='{.data.password}' | base64 -d)"
 ok "GitLab up at ${GITLAB_URL} (root / ${GITLAB_ROOT_PW})"
 
 # ------------------------------------------------------ 6 GitLab API prep ---
-log "6/9  GitLab API token + runner registration"
+log "6/9  GitLab root PAT + runner"
 TOOLBOX="$(oc get pod -n "$GITLAB_NS" -l app=toolbox -o name | head -1)"
 [[ -n "$TOOLBOX" ]] || die "gitlab toolbox pod not found"
 GITLAB_PAT="glpat-$(openssl rand -hex 10)"
 oc exec -n "$GITLAB_NS" "$TOOLBOX" -c toolbox -- gitlab-rails runner "
 u = User.find_by_username('root');
-t = u.personal_access_tokens.create!(scopes: ['api','write_repository'], name: 'automation-$(date +%s)', expires_at: 365.days.from_now);
+t = u.personal_access_tokens.create!(scopes: ['api','write_repository'], name: 'installer-$(date +%s)', expires_at: 365.days.from_now);
 t.set_token('${GITLAB_PAT}'); t.save!;
 " >/dev/null 2>&1 || die "failed to create GitLab root PAT"
 ok "root PAT created"
 
 gl_api() { curl -sk -H "PRIVATE-TOKEN: ${GITLAB_PAT}" "$@"; }
 
-RUNNER_TOKEN="$(gl_api --request POST "${GITLAB_URL}/api/v4/user/runners" \
-  --data "runner_type=instance_type" --data "description=ocp-kubernetes-runner" \
-  --data "run_untagged=true" --data "tag_list=ocp,buildah" \
-  | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
-[[ -n "$RUNNER_TOKEN" ]] || die "failed to create GitLab runner"
-ok "instance runner registered"
+# Runner: create if none exists yet
+if [[ -z "$(gl_api "${GITLAB_URL}/api/v4/runners/all?type=instance_type" | tr ',' '\n' | grep -c '"id"' || true)" ]] \
+   || [[ "$(gl_api "${GITLAB_URL}/api/v4/runners/all?type=instance_type" | tr ',' '\n' | grep -c '"id"')" == "0" ]]; then
+  RUNNER_TOKEN="$(gl_api --request POST "${GITLAB_URL}/api/v4/user/runners" \
+    --data "runner_type=instance_type" --data "description=ocp-kubernetes-runner" \
+    --data "run_untagged=true" --data "tag_list=ocp,buildah" \
+    | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+  [[ -n "$RUNNER_TOKEN" ]] || die "failed to create GitLab runner"
+  ok "instance runner registered"
+else
+  ok "instance runner already registered (reusing existing)"
+  RUNNER_TOKEN="$(oc get secret gitlab-runner-secret -n "$RUNNER_NS" -o jsonpath='{.data.runner-token}' 2>/dev/null | base64 -d || true)"
+  [[ -n "$RUNNER_TOKEN" ]] || die "existing runner but no runner-token secret found; delete existing runner in GitLab UI and re-run"
+fi
 
 # --------------------------------------------------------------- 7 runner ---
-log "7/9  GitLab Runner (privileged, for buildah)"
+log "7/9  GitLab Runner"
 oc create namespace "$RUNNER_NS" --dry-run=client -o yaml | oc apply -f - >/dev/null
 oc create serviceaccount gitlab-runner-sa -n "$RUNNER_NS" --dry-run=client -o yaml | oc apply -f - >/dev/null
 oc adm policy add-scc-to-user privileged -z gitlab-runner-sa -n "$RUNNER_NS" >/dev/null
-# NOTE: chart 0.76 projects BOTH keys; runner-registration-token must exist (may be empty).
+# Chart projects both keys; runner-registration-token must exist (empty allowed).
 oc create secret generic gitlab-runner-secret -n "$RUNNER_NS" \
   --from-literal=runner-token="$RUNNER_TOKEN" \
   --from-literal=runner-registration-token="" \
   --dry-run=client -o yaml | oc apply -f - >/dev/null
-helm repo add gitlab https://charts.gitlab.io >/dev/null 2>&1 || true
-helm repo update >/dev/null 2>&1
 helm upgrade --install gitlab-runner gitlab/gitlab-runner \
   --version "$RUNNER_CHART_VERSION" -n "$RUNNER_NS" \
   -f "${REPO_DIR}/deploy/gitlab/03-runner-values.yaml" >/dev/null
@@ -198,73 +213,153 @@ for _ in $(seq 1 40); do
 done; echo
 ok "runner online"
 
-# ------------------------------------------------- 8 GitLab project + vars ---
-log "8/9  GitLab project + CI/CD variables"
-PROJECT_ID="$(gl_api "${GITLAB_URL}/api/v4/projects?search=${GITLAB_PROJECT}&owned=true" \
-  | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)"
-if [[ -z "$PROJECT_ID" ]]; then
-  PROJECT_ID="$(gl_api --request POST "${GITLAB_URL}/api/v4/projects" \
-    --data "name=${GITLAB_PROJECT}" --data "visibility=private" \
-    | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)"
-fi
-[[ -n "$PROJECT_ID" ]] || die "failed to create/find GitLab project"
-# Mirror force-pushes onto main, so it must not be protected.
-gl_api --request DELETE "${GITLAB_URL}/api/v4/projects/${PROJECT_ID}/protected_branches/main" >/dev/null 2>&1 || true
+# ----------------------------------- 8 GitLab projects: create + seed + vars ---
+log "8/9  GitLab projects, seed content, CI variables"
 
-set_var() { # key value
-  gl_api --request POST "${GITLAB_URL}/api/v4/projects/${PROJECT_ID}/variables" \
-    --data "key=$1" --data-urlencode "value=$2" --data "masked=false" --data "protected=false" >/dev/null 2>&1 \
-  || gl_api --request PUT "${GITLAB_URL}/api/v4/projects/${PROJECT_ID}/variables/$1" \
-    --data-urlencode "value=$2" --data "masked=false" --data "protected=false" >/dev/null 2>&1
+create_or_get_project() {                     # $1 = project name  → echoes project id
+  local name="$1"
+  local existing
+  existing=$(gl_api "${GITLAB_URL}/api/v4/projects?search=${name}&owned=true" \
+             | python3 -c "import sys,json;p=[x for x in json.load(sys.stdin) if x['path']=='${name}'];print(p[0]['id'] if p else '')" 2>/dev/null)
+  if [[ -z "$existing" ]]; then
+    gl_api --request POST "${GITLAB_URL}/api/v4/projects" \
+      --data "name=${name}" --data "path=${name}" \
+      --data "visibility=private" --data "initialize_with_readme=false" \
+      | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1
+  else
+    echo "$existing"
+  fi
 }
-set_var REGISTRY_USER  "gitlab-pusher"
-set_var REGISTRY_TOKEN "$PUSHER_TOKEN"
-set_var GITHUB_TOKEN   "$GH_PAT"
-ok "project id ${PROJECT_ID}, CI variables set"
 
-# seed the GitLab project so a pipeline can run before the first GitHub push
-git -C "$REPO_DIR" -c http.sslVerify=false push --force \
-  "https://oauth2:${GITLAB_PAT}@${GITLAB_HOST}/root/${GITLAB_PROJECT}.git" HEAD:main >/dev/null 2>&1 \
-  && ok "seeded GitLab project with repo contents" \
-  || warn "could not seed GitLab project (push it manually later)"
+APP_PID="$(create_or_get_project "$APP_PROJECT")"
+GITOPS_PID="$(create_or_get_project "$GITOPS_PROJECT")"
+[[ -n "$APP_PID"    ]] || die "failed to create/find ${APP_PROJECT} project"
+[[ -n "$GITOPS_PID" ]] || die "failed to create/find ${GITOPS_PROJECT} project"
+ok "project ${APP_PROJECT} (id ${APP_PID}), ${GITOPS_PROJECT} (id ${GITOPS_PID})"
 
-# ------------------------------------------------------- 9 GitHub + ArgoCD ---
-log "9/9  GitHub secrets + ArgoCD Application"
-if command -v gh >/dev/null; then
-  GH_TOKEN="$GH_PAT" gh secret   set GITLAB_PUSH_TOKEN --body "$GITLAB_PAT"  --repo "$GITHUB_REPO" >/dev/null 2>&1 \
-    && ok "GitHub secret GITLAB_PUSH_TOKEN set" || warn "could not set GitHub secret"
-  GH_TOKEN="$GH_PAT" gh variable set GITLAB_URL --body "$GITLAB_HOST" --repo "$GITHUB_REPO" >/dev/null 2>&1 \
-    && ok "GitHub variable GITLAB_URL=${GITLAB_HOST}" || warn "could not set GitHub variable"
-else
-  warn "gh CLI not found — set GITLAB_PUSH_TOKEN (secret) and GITLAB_URL=${GITLAB_HOST} (variable) manually"
+# Unprotect main on both — the initial seed does a force push
+for pid in "$APP_PID" "$GITOPS_PID"; do
+  gl_api --request DELETE "${GITLAB_URL}/api/v4/projects/${pid}/protected_branches/main" >/dev/null 2>&1 || true
+done
+
+# Seed the app project (only if it has no commits yet)
+seed_project() {                              # $1 = pid  $2 = local seed dir  $3 = project path (e.g. sample-app)
+  local pid="$1" src="$2" pname="$3"
+  local commits
+  commits=$(gl_api "${GITLAB_URL}/api/v4/projects/${pid}/repository/commits?per_page=1" | grep -c '"id"' || true)
+  if [[ "$commits" -gt 0 ]]; then
+    warn "${pname} already has commits — skipping seed (delete project + re-run to reseed)"
+    return
+  fi
+  local tmp; tmp=$(mktemp -d)
+  cp -R "$src"/. "$tmp"/
+  ( cd "$tmp"
+    git init -q -b main
+    git config user.email "installer@demo" && git config user.name "installer"
+    git config http.sslVerify false
+    git add -A
+    git commit -q -m "initial seed from ocp-ci-cd-pipeline-demo templates"
+    git push -q "https://oauth2:${GITLAB_PAT}@${GITLAB_HOST}/root/${pname}.git" main:main
+  )
+  rm -rf "$tmp"
+  ok "seeded ${pname}"
+}
+
+# Render the JFrog image path into the gitops overlays before seeding
+RENDERED_GITOPS="${OUT_DIR}/gitops-seed"
+rm -rf "$RENDERED_GITOPS"
+cp -R "${REPO_DIR}/templates/gitops" "$RENDERED_GITOPS"
+find "$RENDERED_GITOPS" -type f -name '*.yaml' -exec sed -i.bak "s|__IMAGE_REPO__|${IMAGE_REPO}|g" {} \;
+find "$RENDERED_GITOPS" -name '*.bak' -delete
+
+seed_project "$APP_PID"    "${REPO_DIR}/templates/sample-app" "$APP_PROJECT"
+seed_project "$GITOPS_PID" "$RENDERED_GITOPS"                 "$GITOPS_PROJECT"
+
+# Deploy token on gitops project with write_repository — used by sample-app CI to bump tags
+# (Also serves ArgoCD's read access; scope includes read.)
+DEPLOY_TOKEN_NAME="ci-writer"
+# Idempotency: check if a token with this name already exists
+EXISTING_TOKENS=$(gl_api "${GITLAB_URL}/api/v4/projects/${GITOPS_PID}/deploy_tokens" \
+  | python3 -c "import sys,json;print(','.join(str(t['id']) for t in json.load(sys.stdin) if t['name']=='${DEPLOY_TOKEN_NAME}'))" 2>/dev/null)
+if [[ -n "$EXISTING_TOKENS" ]]; then
+  # Delete existing so we can create a fresh one (we can't retrieve the token value after creation)
+  for tid in ${EXISTING_TOKENS//,/ }; do
+    gl_api --request DELETE "${GITLAB_URL}/api/v4/projects/${GITOPS_PID}/deploy_tokens/${tid}" >/dev/null || true
+  done
 fi
+DEPLOY_TOKEN_JSON=$(gl_api --request POST "${GITLAB_URL}/api/v4/projects/${GITOPS_PID}/deploy_tokens" \
+  --data "name=${DEPLOY_TOKEN_NAME}" \
+  --data "scopes[]=read_repository" --data "scopes[]=write_repository")
+GITOPS_DEPLOY_TOKEN=$(echo "$DEPLOY_TOKEN_JSON" | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])" 2>/dev/null || true)
+[[ -n "$GITOPS_DEPLOY_TOKEN" ]] || die "failed to create deploy token on ${GITOPS_PROJECT}"
+ok "deploy token ${DEPLOY_TOKEN_NAME} created on ${GITOPS_PROJECT}"
 
-oc apply -f "${REPO_DIR}/deploy/argocd/02-sample-app-application.yaml" >/dev/null
-oc annotate application sample-app -n openshift-gitops argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
-ok "ArgoCD Application applied"
+# CI variables on the app project
+set_var() {                                  # $1 project id  $2 key  $3 value
+  local pid="$1" k="$2" v="$3"
+  gl_api --request POST "${GITLAB_URL}/api/v4/projects/${pid}/variables" \
+    --data "key=$k" --data-urlencode "value=$v" --data "masked=false" --data "protected=false" >/dev/null 2>&1 \
+  || gl_api --request PUT "${GITLAB_URL}/api/v4/projects/${pid}/variables/$k" \
+    --data-urlencode "value=$v" --data "masked=false" --data "protected=false" >/dev/null 2>&1
+}
+set_var "$APP_PID" JFROG_URL           "$JFROG_URL"
+set_var "$APP_PID" JFROG_REPO          "$JFROG_REPO"
+set_var "$APP_PID" JFROG_USER          "$JFROG_USER"
+set_var "$APP_PID" JFROG_TOKEN         "$JFROG_TOKEN"
+set_var "$APP_PID" GITOPS_DEPLOY_TOKEN "$GITOPS_DEPLOY_TOKEN"
+set_var "$APP_PID" GITOPS_PROJECT_URL  "${GITLAB_HOST}/root/${GITOPS_PROJECT}"
+ok "CI variables set on ${APP_PROJECT}"
 
-# GitHub -> ArgoCD push webhook, so a gitops commit syncs immediately instead of
-# waiting out ArgoCD's 3-minute polling interval (timeout.reconciliation).
-# insecure_ssl=1 because the route uses the cluster's self-signed router cert.
+# --------------------------------------------------- 9 ArgoCD Applications ---
+log "9/9  ArgoCD wiring (GitLab CA trust, Repository secret, Applications, webhook)"
+
+# 9a. Trust GitLab CA in ArgoCD so it can clone https://gitlab.apps.*
+CA_PEM=$(cat "${CERT_DIR}/ca.crt")
+oc get cm argocd-tls-certs-cm -n openshift-gitops >/dev/null 2>&1 || \
+  oc create configmap argocd-tls-certs-cm -n openshift-gitops >/dev/null
+oc patch cm argocd-tls-certs-cm -n openshift-gitops --type=merge \
+  -p "$(python3 -c "import json,sys;print(json.dumps({'data':{'${GITLAB_HOST}':sys.stdin.read()}}))" <<< "$CA_PEM")" >/dev/null
+
+# 9b. Repository secret so ArgoCD can read the private gitops project
+oc apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: repo-sample-app-gitops
+  namespace: openshift-gitops
+  labels:
+    argocd.argoproj.io/secret-type: repository
+stringData:
+  type: git
+  url: ${GITLAB_URL}/root/${GITOPS_PROJECT}.git
+  username: oauth2
+  password: ${GITOPS_DEPLOY_TOKEN}
+EOF
+
+# 9c. Both Applications (dev + prod), with rendered GitLab host
+for app in sample-app-dev sample-app-prod; do
+  sed "s|__GITLAB_HOST__|${GITLAB_HOST}|g" "${REPO_DIR}/deploy/argocd/${app}.yaml" \
+    | oc apply -f - >/dev/null
+done
+ok "ArgoCD dev + prod Applications applied"
+
+# 9d. ArgoCD webhook secret + GitLab -> ArgoCD project webhook (instant sync)
 WEBHOOK_SECRET="$(openssl rand -hex 20)"
 oc patch secret argocd-secret -n openshift-gitops --type merge \
-  -p "{\"stringData\":{\"webhook.github.secret\":\"${WEBHOOK_SECRET}\"}}" >/dev/null 2>&1
+  -p "{\"stringData\":{\"webhook.gitlab.secret\":\"${WEBHOOK_SECRET}\"}}" >/dev/null 2>&1
 oc rollout restart deploy/openshift-gitops-server -n openshift-gitops >/dev/null 2>&1
 oc rollout status deploy/openshift-gitops-server -n openshift-gitops --timeout=120s >/dev/null 2>&1
-HOOK_URL="https://${ARGO_HOST}/api/webhook"
-for id in $(curl -s -H "Authorization: token ${GH_PAT}" "https://api.github.com/repos/${GITHUB_REPO}/hooks" \
-            | python3 -c "import sys,json;[print(h['id']) for h in json.load(sys.stdin) if h.get('config',{}).get('url','').endswith('/api/webhook')]" 2>/dev/null); do
-  curl -s -X DELETE -H "Authorization: token ${GH_PAT}" \
-    "https://api.github.com/repos/${GITHUB_REPO}/hooks/${id}" >/dev/null 2>&1
+ARGO_WEBHOOK_URL="https://${ARGO_HOST}/api/webhook"
+# Remove any existing webhook on the gitops project first (idempotency)
+for hid in $(gl_api "${GITLAB_URL}/api/v4/projects/${GITOPS_PID}/hooks" | python3 -c "import sys,json;[print(h['id']) for h in json.load(sys.stdin) if h['url'].endswith('/api/webhook')]" 2>/dev/null); do
+  gl_api --request DELETE "${GITLAB_URL}/api/v4/projects/${GITOPS_PID}/hooks/${hid}" >/dev/null 2>&1 || true
 done
-if curl -sf -X POST -H "Authorization: token ${GH_PAT}" \
-     "https://api.github.com/repos/${GITHUB_REPO}/hooks" \
-     -d "{\"name\":\"web\",\"active\":true,\"events\":[\"push\"],\"config\":{\"url\":\"${HOOK_URL}\",\"content_type\":\"json\",\"secret\":\"${WEBHOOK_SECRET}\",\"insecure_ssl\":\"1\"}}" \
-     >/dev/null 2>&1; then
-  ok "GitHub -> ArgoCD webhook created (instant sync)"
-else
-  warn "could not create ArgoCD webhook — ArgoCD will still poll every 3 min"
-fi
+gl_api --request POST "${GITLAB_URL}/api/v4/projects/${GITOPS_PID}/hooks" \
+  --data "url=${ARGO_WEBHOOK_URL}" \
+  --data "push_events=true" \
+  --data "enable_ssl_verification=false" \
+  --data "token=${WEBHOOK_SECRET}" >/dev/null
+ok "GitLab -> ArgoCD webhook created (instant sync on gitops commits)"
 
 # --------------------------------------------------------------- summary ----
 cat > "${OUT_DIR}/credentials.txt" <<EOF
@@ -272,31 +367,58 @@ cat > "${OUT_DIR}/credentials.txt" <<EOF
 CLUSTER_API=$(oc whoami --show-server)
 APPS_DOMAIN=${APPS_DOMAIN}
 
+# --- OpenShift GitOps (ArgoCD) ---
 ARGOCD_URL=https://${ARGO_HOST}
 ARGOCD_USER=admin
 ARGOCD_PASSWORD=${ARGO_PW}
 ARGOCD_WEBHOOK_SECRET=${WEBHOOK_SECRET}
 
+# --- GitLab (in-cluster) ---
 GITLAB_URL=${GITLAB_URL}
 GITLAB_USER=root
 GITLAB_PASSWORD=${GITLAB_ROOT_PW}
 GITLAB_ROOT_PAT=${GITLAB_PAT}
-GITLAB_PROJECT_ID=${PROJECT_ID}
+GITLAB_APP_PROJECT_ID=${APP_PID}
+GITLAB_GITOPS_PROJECT_ID=${GITOPS_PID}
 GITLAB_RUNNER_TOKEN=${RUNNER_TOKEN}
+GITOPS_DEPLOY_TOKEN=${GITOPS_DEPLOY_TOKEN}
 
-APP_URL=https://sample-app-${APP_NS}.${APPS_DOMAIN}
+# --- JFrog Artifactory ---
+JFROG_URL=${JFROG_URL}
+JFROG_REPO=${JFROG_REPO}
+JFROG_USER=${JFROG_USER}
+IMAGE_REPO=${IMAGE_REPO}
+
+# --- Apps ---
+APP_DEV_URL=https://sample-app-${DEV_NS}.${APPS_DOMAIN}
+APP_PROD_URL=https://sample-app-${PROD_NS}.${APPS_DOMAIN}
 EOF
 chmod 600 "${OUT_DIR}/credentials.txt"
 
 log "Done"
 cat <<EOF
-  ArgoCD    https://${ARGO_HOST}          admin / ${ARGO_PW}
-  GitLab    ${GITLAB_URL}                 root / ${GITLAB_ROOT_PW}
-  Pipelines ${GITLAB_URL}/root/${GITLAB_PROJECT}/-/pipelines
-  App       https://sample-app-${APP_NS}.${APPS_DOMAIN}
+
+  ArgoCD    https://${ARGO_HOST}
+            admin / ${ARGO_PW}
+
+  GitLab    ${GITLAB_URL}
+            root / ${GITLAB_ROOT_PW}
+
+  Projects  ${GITLAB_URL}/root/${APP_PROJECT}         (application source + CI)
+            ${GITLAB_URL}/root/${GITOPS_PROJECT}      (deployment manifests)
+
+  Registry  ${JFROG_URL}/${JFROG_REPO}                (JFrog Artifactory)
+
+  Apps      https://sample-app-${DEV_NS}.${APPS_DOMAIN}    (dev, auto-sync)
+            https://sample-app-${PROD_NS}.${APPS_DOMAIN}   (prod, manual sync)
 
   Credentials saved to: ${OUT_DIR}/credentials.txt
 
-  Next: edit sample-app/app.py, commit and push to ${GITHUB_REPO}.
-        The GitHub Action mirrors to GitLab -> pipeline builds -> ArgoCD deploys.
+  Next:
+    1. Edit sample-app/app.py in GitLab (${GITLAB_URL}/root/${APP_PROJECT})
+       commit + push to main. CI builds → pushes to JFrog → bumps
+       sample-app-gitops/overlays/dev/kustomization.yaml → ArgoCD deploys dev.
+    2. To promote dev -> prod: open MR in ${GITOPS_PROJECT} that copies the
+       current dev newTag into overlays/prod/kustomization.yaml, review, merge.
+       Then sync the sample-app-prod Application in ArgoCD (UI/CLI).
 EOF
