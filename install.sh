@@ -120,6 +120,17 @@ ok "namespace ${GITLAB_NS} ready, gitlab-anyuid SCC bound, helm repo added"
 # --------------------------------------------------- 4 self-signed TLS ------
 log "4/9  Self-signed TLS for *.${APPS_DOMAIN}"
 CERT_DIR="${OUT_DIR}/certs"; mkdir -p "$CERT_DIR"
+# Regenerate if the existing cert's SAN doesn't cover the current apps domain
+# (happens when .install-output/ was carried across clusters).
+if [[ -f "${CERT_DIR}/tls.crt" ]]; then
+  if ! openssl x509 -in "${CERT_DIR}/tls.crt" -noout -ext subjectAltName 2>/dev/null \
+       | grep -q "DNS:\*\.${APPS_DOMAIN}"; then
+    warn "existing cert is for a different domain — regenerating"
+    rm -f "${CERT_DIR}/tls.crt" "${CERT_DIR}/tls.key" "${CERT_DIR}/ca.crt" \
+          "${CERT_DIR}/ca.key" "${CERT_DIR}/fullchain.crt" "${CERT_DIR}/tls.csr" \
+          "${CERT_DIR}/san.ext" "${CERT_DIR}/ca.srl"
+  fi
+fi
 if [[ ! -f "${CERT_DIR}/tls.crt" ]]; then
   openssl genrsa -out "${CERT_DIR}/ca.key" 4096 2>/dev/null
   openssl req -x509 -new -nodes -key "${CERT_DIR}/ca.key" -sha256 -days 825 \
@@ -218,17 +229,20 @@ log "8/9  GitLab projects, seed content, CI variables"
 
 create_or_get_project() {                     # $1 = project name  → echoes project id
   local name="$1"
-  local existing
+  local existing new
   existing=$(gl_api "${GITLAB_URL}/api/v4/projects?search=${name}&owned=true" \
              | python3 -c "import sys,json;p=[x for x in json.load(sys.stdin) if x['path']=='${name}'];print(p[0]['id'] if p else '')" 2>/dev/null)
-  if [[ -z "$existing" ]]; then
-    gl_api --request POST "${GITLAB_URL}/api/v4/projects" \
-      --data "name=${name}" --data "path=${name}" \
-      --data "visibility=private" --data "initialize_with_readme=false" \
-      | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1
-  else
+  if [[ -n "$existing" ]]; then
     echo "$existing"
+    return
   fi
+  # Parse the project id from POST response with python — a POST /projects
+  # response contains multiple "id" fields (project, namespace, owner), so
+  # sed's greedy .* matches the wrong one (typically the root user's id=1).
+  new=$(gl_api --request POST "${GITLAB_URL}/api/v4/projects" \
+        --data "name=${name}" --data "path=${name}" \
+        --data "visibility=private" --data "initialize_with_readme=false")
+  echo "$new" | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" 2>/dev/null
 }
 
 APP_PID="$(create_or_get_project "$APP_PROJECT")"
@@ -275,32 +289,37 @@ find "$RENDERED_GITOPS" -name '*.bak' -delete
 seed_project "$APP_PID"    "${REPO_DIR}/templates/sample-app" "$APP_PROJECT"
 seed_project "$GITOPS_PID" "$RENDERED_GITOPS"                 "$GITOPS_PROJECT"
 
-# Deploy token on gitops project with write_repository — used by sample-app CI to bump tags
-# (Also serves ArgoCD's read access; scope includes read.)
-DEPLOY_TOKEN_NAME="ci-writer"
-# Idempotency: check if a token with this name already exists
-EXISTING_TOKENS=$(gl_api "${GITLAB_URL}/api/v4/projects/${GITOPS_PID}/deploy_tokens" \
-  | python3 -c "import sys,json;print(','.join(str(t['id']) for t in json.load(sys.stdin) if t['name']=='${DEPLOY_TOKEN_NAME}'))" 2>/dev/null)
-if [[ -n "$EXISTING_TOKENS" ]]; then
-  # Delete existing so we can create a fresh one (we can't retrieve the token value after creation)
-  for tid in ${EXISTING_TOKENS//,/ }; do
-    gl_api --request DELETE "${GITLAB_URL}/api/v4/projects/${GITOPS_PID}/deploy_tokens/${tid}" >/dev/null || true
-  done
-fi
-DEPLOY_TOKEN_JSON=$(gl_api --request POST "${GITLAB_URL}/api/v4/projects/${GITOPS_PID}/deploy_tokens" \
-  --data "name=${DEPLOY_TOKEN_NAME}" \
-  --data "scopes[]=read_repository" --data "scopes[]=write_repository")
-GITOPS_DEPLOY_TOKEN=$(echo "$DEPLOY_TOKEN_JSON" | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])" 2>/dev/null || true)
-[[ -n "$GITOPS_DEPLOY_TOKEN" ]] || die "failed to create deploy token on ${GITOPS_PROJECT}"
-ok "deploy token ${DEPLOY_TOKEN_NAME} created on ${GITOPS_PROJECT}"
+# Project Access Token on gitops repo — used by BOTH:
+#   - sample-app CI: to push tag bumps into overlays/dev/kustomization.yaml
+#   - ArgoCD:        to clone the private repo (needs read; the token grants that too)
+# NOTE: deploy tokens are read-only for repositories in GitLab — write_repository
+# is not a valid deploy-token scope. Project access tokens are the right primitive.
+GITOPS_PAT_NAME="ci-writer"
+# Idempotency: revoke any prior project access token with this name (can't retrieve value)
+for tid in $(gl_api "${GITLAB_URL}/api/v4/projects/${GITOPS_PID}/access_tokens" \
+             | python3 -c "import sys,json;[print(t['id']) for t in json.load(sys.stdin) if t.get('name')=='${GITOPS_PAT_NAME}']" 2>/dev/null); do
+  gl_api --request DELETE "${GITLAB_URL}/api/v4/projects/${GITOPS_PID}/access_tokens/${tid}" >/dev/null || true
+done
+# expires_at is required by GitLab 16+; use 1 year (max allowed on many instances is 365d)
+GITOPS_PAT_EXPIRES=$(python3 -c "from datetime import date,timedelta;print((date.today()+timedelta(days=365)).isoformat())")
+GITOPS_PAT_JSON=$(gl_api --request POST "${GITLAB_URL}/api/v4/projects/${GITOPS_PID}/access_tokens" \
+  --data "name=${GITOPS_PAT_NAME}" \
+  --data "access_level=40" \
+  --data "expires_at=${GITOPS_PAT_EXPIRES}" \
+  --data "scopes[]=api" --data "scopes[]=write_repository" --data "scopes[]=read_repository")
+GITOPS_DEPLOY_TOKEN=$(echo "$GITOPS_PAT_JSON" | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
+[[ -n "$GITOPS_DEPLOY_TOKEN" ]] \
+  || die "failed to create project access token on ${GITOPS_PROJECT}: ${GITOPS_PAT_JSON}"
+ok "project access token '${GITOPS_PAT_NAME}' created on ${GITOPS_PROJECT}"
 
-# CI variables on the app project
+# CI variables on the app project — delete+create is idempotent AND actually
+# updates the value. (Previous POST||PUT idiom broke because curl returns exit
+# 0 on HTTP 409, so PUT never ran and stale values persisted across re-runs.)
 set_var() {                                  # $1 project id  $2 key  $3 value
   local pid="$1" k="$2" v="$3"
+  gl_api --request DELETE "${GITLAB_URL}/api/v4/projects/${pid}/variables/$k" >/dev/null 2>&1 || true
   gl_api --request POST "${GITLAB_URL}/api/v4/projects/${pid}/variables" \
-    --data "key=$k" --data-urlencode "value=$v" --data "masked=false" --data "protected=false" >/dev/null 2>&1 \
-  || gl_api --request PUT "${GITLAB_URL}/api/v4/projects/${pid}/variables/$k" \
-    --data-urlencode "value=$v" --data "masked=false" --data "protected=false" >/dev/null 2>&1
+    --data "key=$k" --data-urlencode "value=$v" --data "masked=false" --data "protected=false" >/dev/null
 }
 set_var "$APP_PID" JFROG_URL           "$JFROG_URL"
 set_var "$APP_PID" JFROG_REPO          "$JFROG_REPO"

@@ -1,0 +1,108 @@
+# =============================================================================
+# Customer variables reference
+# =============================================================================
+# Every value in this file is a placeholder to substitute for the customer's
+# real environment. Names here match those in install.sh, .gitlab-ci.yml,
+# templates/, and deploy/*.yaml.
+#
+# In the demo, install.sh derives most of these automatically from the target
+# OpenShift cluster and the JFrog creds file. For a customer implementation
+# they'll want to hand-configure these, since GitLab and JFrog are already
+# established parts of their infrastructure — not something install.sh
+# provisions.
+# =============================================================================
+
+
+cluster:
+  # OpenShift API server. install.sh reads this from `oc whoami --show-server`.
+  api:            "https://api.<cluster>:6443"
+
+  # Wildcard suffix under which OpenShift Routes are served. install.sh reads
+  # this from `oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'`.
+  apps_domain:    "apps.<cluster>.example.com"
+
+  # OpenShift GitOps operator subscription channel. On OCP 4.21 use `latest`.
+  # On OCP 4.12 use `gitops-1.8` or `gitops-1.9` (older ArgoCD versions).
+  gitops_channel: "latest"
+
+
+gitlab:
+  # The customer's existing enterprise GitLab. The demo installs one in-cluster
+  # (host: gitlab.apps.<domain>); production uses their real instance.
+  host:           "gitlab.example.com"
+
+  # Group under which the two projects live.
+  group:          "cicd-demo"
+
+  # Individual projects. install.sh creates root/sample-app and
+  # root/sample-app-gitops; customer typically uses a real group path.
+  app_project:    "cicd-demo/sample-app"
+  gitops_project: "cicd-demo/sample-app-gitops"
+
+  # Whether GitLab is EE (unlocks approval rules, pull mirrors, MR trains).
+  edition:        "ee"
+
+
+jfrog:
+  # Docker registry host (no scheme). Same on demo + prod.
+  url:            "artifactory.example.com"
+
+  # Docker repo name inside Artifactory. This is the segment between host and
+  # image name in the final image URL.
+  repo:           "docker-local"
+
+  # Full image path CI pushes to: ${url}/${repo}/sample-app:<commit-sha>
+  # e.g. "artifactory.example.com/docker-local/sample-app:c580bc5b"
+  image_repo:     "artifactory.example.com/docker-local/sample-app"
+
+  # Auth for CI push AND cluster pull. In production, use a service account
+  # with narrowly-scoped push perms on ${repo} and separate read-only creds
+  # for the cluster pull secret.
+  ci_user:        "gitlab-ci@example.com"
+  ci_token:       "<jfrog identity token — masked in GitLab CI variables>"
+
+
+tls:
+  # In the demo, install.sh generates a self-signed wildcard cert for
+  # *.apps.<domain>. In production, use cert-manager + Let's Encrypt or
+  # the customer's internal CA.
+  strategy:       "cert-manager"
+  ca_secret:      "corporate-ca-bundle"   # in argocd-tls-certs-cm if internal CA
+
+
+argocd:
+  # Namespace where OpenShift GitOps controller runs (default of the operator).
+  namespace:      "openshift-gitops"
+
+  # Applications this reference creates. Customer typically has more.
+  applications:
+    - name:       "sample-app-dev"
+      overlay:    "overlays/dev"
+      namespace:  "sample-app-dev"
+      auto_sync:  true
+    - name:       "sample-app-prod"
+      overlay:    "overlays/prod"
+      namespace:  "sample-app-prod"
+      auto_sync:  false   # PR-gated in real prod
+
+
+workloads:
+  # Where the deployed app pods run. Named per environment.
+  dev_namespace:  "sample-app-dev"
+  prod_namespace: "sample-app-prod"
+
+  # ImagePullSecret referenced by the Deployment (kubectl get deploy -o yaml).
+  # install.sh creates this in each namespace, populated from jfrog.* above.
+  pull_secret:    "jfrog-pull"
+
+
+ci_variables:
+  # These are set on the sample-app GitLab project's Settings > CI/CD > Variables.
+  # install.sh sets them from the JFrog creds file + a project access token
+  # created on the gitops project.
+  JFROG_URL:            "→ jfrog.url"
+  JFROG_REPO:           "→ jfrog.repo"
+  JFROG_USER:           "→ jfrog.ci_user"
+  JFROG_TOKEN:          "→ jfrog.ci_token (masked)"
+  GITOPS_DEPLOY_TOKEN:  "project access token on gitlab.gitops_project with write_repository scope"
+  GITOPS_PROJECT_URL:   "gitlab.host/gitlab.gitops_project  (no scheme, no .git)"

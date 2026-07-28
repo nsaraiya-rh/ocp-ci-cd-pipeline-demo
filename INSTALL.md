@@ -1,96 +1,127 @@
-# Installing on a fresh OpenShift cluster
+# Installing on an OpenShift cluster
 
-One command deploys the whole stack: ArgoCD, GitLab, GitLab Runner, the image-push
-service account, the GitLab project + CI variables, GitHub secrets, and the ArgoCD
-Application.
+One command deploys the whole reference pipeline: OpenShift GitOps (ArgoCD),
+an in-cluster GitLab, a privileged GitLab Runner, two GitLab projects seeded
+from `templates/`, dev + prod ArgoCD Applications, and a GitLab → ArgoCD
+push webhook — with JFrog Artifactory as the image registry.
 
 ## Prerequisites
 
 | Requirement | Notes |
 |---|---|
-| OpenShift cluster | 4.14+, with cluster-admin. Tested on 4.21. |
+| OpenShift cluster | 4.14+, cluster-admin. Tested on 4.21 (drop-ins for 4.12 in troubleshooting below). |
 | `oc`, `helm`, `git` | on `PATH` |
-| `gh` CLI | optional but recommended — used to set the GitHub secret/variable |
-| GitHub PAT | **classic** token with **`repo` + `workflow`** scopes |
-| Cluster resources | ~8 vCPU / 16Gi free. GitLab bundles PostgreSQL, Redis, MinIO, Gitaly. |
+| Cluster resources | ~8 vCPU / 16 GiB free. GitLab bundles PostgreSQL, Redis, MinIO, Gitaly. |
+| JFrog registry | JFrog Cloud (free tier is fine) or self-hosted Artifactory with a Docker repo |
 
-> A fine-grained GitHub token will **not** work unless it grants *Contents: read/write*
-> **and** *Workflows: read/write*. A classic PAT is simpler.
+## Credentials setup — one-time
 
-## Run it
+Save your JFrog credentials outside the repo (the installer reads them):
 
 ```bash
-oc login --token=sha256~... --server=https://api.<cluster-domain>:6443
-export GH_PAT=ghp_xxxxxxxxxxxx
+mkdir -p ~/.config/ocp-clusters
+cat > ~/.config/ocp-clusters/jfrog-creds.txt <<EOF
+JFROG_URL=yourname.jfrog.io
+JFROG_REPO=your-docker-repo
+JFROG_USER=you@example.com
+JFROG_TOKEN=<jfrog identity token or api key with push+pull>
+EOF
+chmod 600 ~/.config/ocp-clusters/jfrog-creds.txt
+```
+
+The `JFROG_URL` is the host only (no `https://`). The `JFROG_REPO` is the
+name of your Docker repository *inside* Artifactory (the segment you see
+under **Application → Artifactory → Repositories**).
+
+## Run
+
+```bash
+oc login --token=sha256~... --server=https://api.<cluster>:6443
 ./install.sh
 ```
 
-The script auto-detects the cluster's apps domain, so **nothing is hardcoded** —
-it works on any cluster. Expect **~15–25 minutes**, mostly waiting for GitLab.
-
-It is **idempotent** — safe to re-run if a step fails.
+`install.sh` is **idempotent** — safe to re-run at any point. It writes all
+generated credentials to `.install-output/credentials.txt` (mode 600,
+gitignored). Expected duration: **15–25 min on a fresh cluster**, mostly
+waiting for GitLab.
 
 ## What it does
 
-| Step | Action |
-|---|---|
-| 1 | OpenShift GitOps operator → ArgoCD |
-| 2 | `sample-app` namespace, `gitlab-pusher` SA (+ `system:image-builder`), long-lived token, imagestream, registry route |
-| 3 | `gitlab-system` namespace, custom `gitlab-anyuid` SCC, Helm repo |
-| 4 | Self-signed CA + wildcard cert for `*.<apps-domain>` → TLS secrets |
-| 5 | GitLab via **Helm** (chart 9.11.8 / GitLab 18.11) exposed via OpenShift Routes |
-| 6 | GitLab root PAT (rails console) + instance runner registration |
-| 7 | GitLab Runner (Helm 0.76.3), Kubernetes executor, **privileged** SCC for buildah |
-| 8 | GitLab project `root/sample-app`, unprotect `main`, CI variables |
-| 9 | GitHub `GITLAB_PUSH_TOKEN` secret + `GITLAB_URL` variable, ArgoCD Application, and a GitHub→ArgoCD push webhook |
-
-### ArgoCD sync behaviour
-
-The Application uses `syncPolicy.automated` with `prune` and `selfHeal`, so it
-deploys without manual intervention. By default ArgoCD only *notices* new commits
-when it polls (`timeout.reconciliation`, 180s), so step 9 also registers a GitHub
-push webhook to `https://<argocd-host>/api/webhook` — gitops commits then sync in
-seconds instead of up to 3 minutes.
-
-The webhook is created with `insecure_ssl: 1` because the ArgoCD route uses the
-cluster's self-signed router certificate. The shared secret is stored in the
-`argocd-secret` Secret under `webhook.github.secret` (and in `credentials.txt`).
-
-## Credentials
-
-Everything generated is written to **`.install-output/credentials.txt`** (gitignored,
-mode 600): ArgoCD admin password, GitLab root password, GitLab PAT, runner token.
-
-> **Keep this file.** The GitLab root password and PATs cannot be recovered later —
-> the same way a lost `kubeadmin-password` file is unrecoverable.
+| # | Stage | Notes |
+|---|---|---|
+| 1 | OpenShift GitOps operator | Idempotent — cluster-wide, waits for CSV + argocd-server |
+| 2 | `sample-app-dev` + `sample-app-prod` namespaces | Labelled for ArgoCD, each with a JFrog `docker-registry` pull secret |
+| 3 | `gitlab-system` namespace + custom `gitlab-anyuid` SCC | GitLab pods need UID 65534 AND legacy seccomp — neither restricted-v2 nor built-in anyuid allow both |
+| 4 | Self-signed wildcard cert for `*.<apps-domain>` | Auto-regenerated if a previous cert's SAN doesn't match the current cluster |
+| 5 | GitLab via Helm (chart 9.11.8) | Chart 10+ dropped bundled PG/Redis/MinIO — we pin 9.11.8 |
+| 6 | Root PAT + GitLab Runner registration | Reuses existing runner if one is registered |
+| 7 | GitLab Runner Helm chart 0.88.4 | Kubernetes executor, `gitlab-runner-sa` with privileged SCC |
+| 8 | Create `root/sample-app` + `root/sample-app-gitops` projects, seed from `templates/`, set CI variables + project access token | Skips seeding if a project already has commits — delete the project in GitLab to reseed |
+| 9 | ArgoCD wiring: trust GitLab CA, Repository secret, dev + prod Applications, GitLab push webhook | Repo access uses the same project access token as CI (write_repository scope) |
 
 ## After install
 
-The `gitops/kustomization.yaml` image tag still points at an image from a previous
-cluster, so the app pods will briefly **ImagePullBackOff** until the first pipeline
-runs. This self-corrects: the script seeds the GitLab project, which triggers a
-pipeline that builds an image into the new cluster's registry and rewrites the tag.
+Credentials live at `.install-output/credentials.txt`. The output prints the
+same info to your terminal. Consider copying it to
+`~/.config/ocp-clusters/<name>/` so a cluster reprovision doesn't lose it.
 
-To verify end-to-end, edit the message in `sample-app/app.py`, then:
+Try it end to end:
 
 ```bash
-git commit -am "test pipeline" && git push
+# 1. Clone the sample-app project from GitLab
+git -c http.sslVerify=false clone https://oauth2:<GITLAB_ROOT_PAT>@<GITLAB_HOST>/root/sample-app.git
+
+# 2. Edit sample-app/app.py MESSAGE
+# 3. Commit + push
+git commit -am "test: change message" && git push
+
+# 4. Watch it flow:
+#    - GitLab pipeline builds + pushes to JFrog
+#    - update-manifest bumps sample-app-gitops/overlays/dev/kustomization.yaml
+#    - ArgoCD auto-syncs sample-app-dev
+#    - app comes up at https://sample-app-sample-app-dev.apps.<cluster>
 ```
 
-Watch it flow:
-1. **GitHub Action** → `https://github.com/<repo>/actions`
-2. **GitLab pipeline** → `https://gitlab.apps.<domain>/root/sample-app/-/pipelines`
-3. **ArgoCD** → `https://openshift-gitops-server-openshift-gitops.apps.<domain>`
-4. **App** → `https://sample-app-sample-app.apps.<domain>`
+To promote dev → prod (this simulates what a release manager does):
+
+```bash
+git -c http.sslVerify=false clone https://oauth2:<PAT>@<GITLAB_HOST>/root/sample-app-gitops.git
+cd sample-app-gitops
+# copy the tag from dev to prod
+DEV_TAG=$(grep -E '^\s*newTag:' overlays/dev/kustomization.yaml | awk '{print $2}' | tr -d '"')
+sed -i.bak "s|(newTag:).*|\\1 \"$DEV_TAG\"|" overlays/prod/kustomization.yaml
+git commit -am "promote: sample-app $DEV_TAG dev -> prod [skip ci]"
+git push
+
+# ArgoCD's prod Application does NOT auto-sync (by design).
+# Sync it manually from the UI, or:
+oc annotate application sample-app-prod -n openshift-gitops \
+  argocd.argoproj.io/refresh=hard --overwrite
+oc patch application sample-app-prod -n openshift-gitops --type=merge -p \
+  '{"operation":{"sync":{"revision":"main"}}}'
+```
 
 ## Troubleshooting
 
-| Symptom | Cause / fix |
+| Symptom | Fix |
 |---|---|
-| `update-manifest` fails "Invalid username or token" | The GitLab CI variable `GITHUB_TOKEN` is stale. Re-run the script or update it after rotating the GitHub PAT. |
-| GitHub push rejected, "without `workflow` scope" | PAT lacks `workflow` scope. |
-| Action didn't trigger | The commit that *adds* a workflow often doesn't run it; push once more. Also the path filter only matches `sample-app/**`. |
-| ArgoCD `OutOfSync`, RBAC forbidden | Namespace needs `argocd.argoproj.io/managed-by=openshift-gitops` (already in the manifest). |
-| GitLab webservice never ready | Check `oc get pods -n gitlab-system`; usually resource pressure or the migrations job. |
-| `shared-secrets` job stuck, `FailedCreate ... forbidden` | The `gitlab-anyuid` SCC isn't bound. GitLab runs pods as UID 65534 **and** sets legacy seccomp annotations, so neither `restricted-v2` nor built-in `anyuid` accepts them. `install.sh` applies `deploy/gitlab/00-scc-gitlab-anyuid.yaml` and binds it to `system:serviceaccounts:gitlab-system`. |
-| Helm `failed pre-install: timed out` | Same SCC issue above — the hook pod could never be created. Fix the SCC, `helm uninstall gitlab -n gitlab-system`, re-run. |
+| `helm ... failed pre-install: timed out` | `gitlab-anyuid` SCC isn't bound. `install.sh` applies it — check `oc get scc gitlab-anyuid`. Then `helm uninstall gitlab -n gitlab-system` + re-run. |
+| `git clone` from ArgoCD fails with `x509: certificate is valid for *.apps.<other>...` | Stale cert in `.install-output/certs/`. Delete the dir and re-run — install.sh will regenerate for the current apps domain. |
+| `Access denied` on `git clone` from CI | Project access token was revoked. `install.sh` cleans up + creates a new one on re-run; if the CI variable is stale, delete `GITOPS_DEPLOY_TOKEN` in GitLab UI + re-run. |
+| CI pipeline stays pending, no jobs | Push happened on a branch other than `main`, or commit message contains `[skip ci]`. Workflow `rules:` filters both. |
+| Dev pods `ImagePullBackOff` right after install | Expected briefly — no image built yet. Push a commit; first pipeline builds + tags + syncs dev. |
+| GitLab webservice never becomes ready | Slow cluster. `install.sh` waits up to 45 min. Check `oc get pods -n gitlab-system`; usually PVC/migrations. |
+| Running on OpenShift 4.12 | Older OpenShift GitOps operator (v1.8/1.9) — should just work; older `restricted` SCC instead of `restricted-v2`. Custom `gitlab-anyuid` SCC unchanged. If chart 9.11.8 rejects K8s 1.25, try chart 8.x. |
+
+## Reprovisioning to a new cluster
+
+Same command — `./install.sh` — after you `oc login` to the new cluster.
+Because everything is auto-detected from the cluster's apps domain and
+regenerated where necessary, no code edits are required.
+
+Before running the second time, if you plan to keep the old cluster
+credentials around, back them up:
+```bash
+cp .install-output/credentials.txt ~/.config/ocp-clusters/<old-cluster-name>/
+rm -rf .install-output/certs   # force regeneration for the new cluster
+```
