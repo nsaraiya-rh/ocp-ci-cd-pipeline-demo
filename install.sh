@@ -138,12 +138,18 @@ helm upgrade --install gitlab gitlab/gitlab \
   -f "${OUT_DIR}/gitlab-values.rendered.yaml" \
   --timeout 15m >/dev/null
 printf '    waiting for gitlab webservice'
-for _ in $(seq 1 150); do
-  [[ "$(oc get deploy -n "$GITLAB_NS" -l app=webservice \
-        -o jsonpath='{.items[*].status.availableReplicas}' 2>/dev/null)" == *1* ]] && break
+# Use jsonpath to sum readyReplicas; break as soon as >=1. Previous check
+# `== *1*` glob-matched the STRING "1", which missed when replicas jumped
+# straight to 2 (e.g. on a helm-upgrade no-op that never scaled through 1).
+for _ in $(seq 1 225); do   # 225 * 12s = 45 min (some clusters need it)
+  ready=$(oc get deploy -n "$GITLAB_NS" -l app=webservice \
+          -o jsonpath='{.items[0].status.readyReplicas}' 2>/dev/null)
+  [[ -n "$ready" && "$ready" -ge 1 ]] && break
   printf '.'; sleep 12
 done; echo
-[[ "$(oc get deploy -n "$GITLAB_NS" -l app=webservice -o jsonpath='{.items[*].status.availableReplicas}' 2>/dev/null)" == *1* ]] \
+ready=$(oc get deploy -n "$GITLAB_NS" -l app=webservice \
+        -o jsonpath='{.items[0].status.readyReplicas}' 2>/dev/null)
+[[ -n "$ready" && "$ready" -ge 1 ]] \
   || die "GitLab webservice never became available (check: oc get pods -n ${GITLAB_NS})"
 GITLAB_ROOT_PW="$(oc get secret gitlab-gitlab-initial-root-password -n "$GITLAB_NS" -o jsonpath='{.data.password}' | base64 -d)"
 ok "GitLab up at ${GITLAB_URL} (root / ${GITLAB_ROOT_PW})"
