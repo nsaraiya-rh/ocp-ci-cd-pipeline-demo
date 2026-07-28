@@ -1,72 +1,81 @@
-# OpenShift CI/CD Pipeline Demo
+# OpenShift CI/CD Pipeline — Reference Implementation
 
-End-to-end GitOps CI/CD on OpenShift using **GitLab** (CI), **ArgoCD / OpenShift
-GitOps** (CD), the **OpenShift internal registry** (images), and **GitHub** as
-the source of truth.
+An opinionated, one-command reference build of a **GitOps CI/CD pipeline on
+OpenShift**, intended as the working example a customer team can lift and
+adapt for their own environment.
 
-> **Deploying to a cluster?** Run `./install.sh` — see **[INSTALL.md](INSTALL.md)**.
-> It provisions everything below on any OpenShift cluster (nothing is hardcoded).
+> **What this repository is.** The **installer** and **reference
+> documentation** for the pipeline pattern.
+>
+> **What this repository is _not_.** The application source or its Kubernetes
+> manifests — those live in GitLab, per the pattern this reference teaches.
 
-## Flow
+## The pattern
 
 ```
-Developer ── push (sample-app/**) ──▶ GitHub (this repo)
-                                          │ GitHub Action: mirror-to-gitlab
-                                          ▼
-                                 GitLab project root/sample-app
-                                          │ CI pipeline (.gitlab-ci.yml)
-                                          ├─ build-image:    buildah build → push to
-                                          │                  OpenShift internal registry
-                                          └─ update-manifest: bump tag in gitops/kustomization.yaml
-                                                             (commit back to GitHub) ──┐
-                                                                                       ▼
-                                 ArgoCD (OpenShift GitOps) watches gitops/ ── sync ──▶ deploy to
-                                                                                       sample-app namespace
+Developer ── push ──► GitLab (sample-app)
+                          │ .gitlab-ci.yml
+                          ▼
+                     GitLab Runner (on OpenShift)
+                          │ buildah
+                          ▼
+                     JFrog Artifactory (Docker registry)
+                          │
+                          ▼   (CI's second stage)
+                     GitLab (sample-app-gitops) — bump image tag in overlays/dev
+                          │
+                          ▼   ArgoCD watches, auto-syncs
+                     OpenShift — sample-app-dev
+                          │
+                          │   promotion = MR in sample-app-gitops
+                          ▼   changing overlays/prod tag
+                     OpenShift — sample-app-prod  (manual/gated sync)
 ```
 
-- A push touching `sample-app/**` triggers the GitHub Action, which mirrors the
-  repo to GitLab and starts the pipeline.
-- The pipeline's tag-bump commit only touches `gitops/**`, so the Action's path
-  filter skips it — **no build loop**.
+## Components deployed by `install.sh`
+
+| Component | Where | Purpose |
+|---|---|---|
+| OpenShift GitOps operator (ArgoCD) | `openshift-gitops` | Continuous deployment |
+| GitLab | `gitlab-system` | Source of truth + CI orchestration |
+| GitLab Runner | `gitlab-runner` | Job pods (Kubernetes executor, buildah) |
+| Two ArgoCD `Application`s | `openshift-gitops` | One per environment (dev / prod) |
+| Two GitLab projects | GitLab | `root/sample-app`, `root/sample-app-gitops` |
+| JFrog integration | GitLab CI vars + K8s pull secrets | Push from CI, pull to app namespaces |
+
+## Install
+
+```bash
+export GH_PAT=$(cat /path/to/github-pat)          # optional — kept if you back to GitHub
+oc login --token=... --server=https://api.<cluster>:6443
+./install.sh
+```
+
+See **[INSTALL.md](INSTALL.md)** for prerequisites, credentials, and a
+step-by-step of what happens.
 
 ## Repository layout
 
-| Path | Purpose |
-|------|---------|
-| `sample-app/` | Application source (Flask), `Dockerfile`. Edit here to trigger the pipeline. |
-| `.gitlab-ci.yml` | GitLab pipeline: build image → push to registry → bump gitops tag. |
-| `.github/workflows/mirror-to-gitlab.yml` | Mirrors pushes to GitLab (the CI trigger). |
-| `gitops/` | Kustomize manifests ArgoCD deploys (`Deployment`, `Service`, `Route`). CI updates the image tag here. |
-| `deploy/` | One-time cluster setup (applied by a cluster admin). |
-| `deploy/argocd/` | OpenShift GitOps operator subscription + the ArgoCD `Application`. |
-| `deploy/gitlab/` | GitLab operator subscription, `GitLab` CR, runner Helm values. |
-| `deploy/registry/` | `sample-app` namespace, image-push service account + token. |
+```
+install.sh                   Idempotent bootstrap. Reads .install-output/creds.
+deploy/                      Cluster manifests (SCC, operator subs, Helm values).
+docs/                        Architecture diagram + LogQL samples + variables ref.
+INSTALL.md                   Prerequisites, run, troubleshooting.
+```
 
-## Cluster components (already deployed)
+Application source and manifests live in GitLab and are created by
+`install.sh` in the target GitLab. Their contents are seeded from templates
+inside this repo the first time `install.sh` runs.
 
-| Component | How |
-|-----------|-----|
-| ArgoCD | OpenShift GitOps operator (`openshift-gitops` namespace) |
-| GitLab | Helm chart 9.11.8 (GitLab 18.11), self-signed TLS via OpenShift Routes at `gitlab.apps.<domain>`. Needs the custom `gitlab-anyuid` SCC. |
-| GitLab Runner | Helm chart 0.88.x, Kubernetes executor, privileged (buildah) |
-| Image registry | OpenShift internal registry; images at `image-registry.openshift-image-registry.svc:5000/sample-app/sample-app` |
+## For the customer implementation
 
-## Required secrets / variables
+This reference deploys everything onto a single cluster with in-cluster GitLab
+and JFrog Cloud (free tier) for demo compactness. In a real environment:
 
-**GitLab project `root/sample-app` → Settings > CI/CD > Variables**
-| Key | Value |
-|-----|-------|
-| `REGISTRY_USER` | `gitlab-pusher` |
-| `REGISTRY_TOKEN` | OpenShift token for SA `sample-app/gitlab-pusher` |
-| `GITHUB_TOKEN` | GitHub PAT (`repo` scope) to push the tag bump |
-
-**GitHub repo → Settings > Secrets and variables > Actions**
-| Key | Value |
-|-----|-------|
-| `GITLAB_PUSH_TOKEN` | GitLab token that can push to `root/sample-app` |
-
-## Try it
-
-Edit the message in [`sample-app/app.py`](sample-app/app.py), commit, and push to
-`main`. Watch the GitLab pipeline run, then ArgoCD sync the new image. The app is
-exposed at `https://sample-app-sample-app.apps.<cluster-domain>`.
+- Point `install.sh` at your **existing GitLab Enterprise** (skip the in-cluster
+  GitLab install and the runner registration will target your GitLab instead).
+- Point CI at your **existing JFrog Artifactory** (registry URL + creds only).
+- Deploy **ArgoCD in each target cluster** (the operator subscription is the
+  same; the `Application`s and `Repository` secret are portable).
+- See **[docs/customer-variables.yaml](docs/customer-variables.yaml)** for the
+  full list of values you'd substitute.
