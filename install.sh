@@ -237,11 +237,13 @@ APP_PID="$(create_or_get_project "$APP_PROJECT")"
 [[ -n "$APP_PID" ]] || die "failed to create/find ${APP_PROJECT} project"
 ok "project ${APP_PROJECT} (id ${APP_PID})"
 
-# CI_JOB_TOKEN needs to be allowed to push back to this project.
-# GitLab 16+ default is disabled for security; enable it explicitly for the
-# gitops tag-bump commit to work.
-gl_api --request PATCH "${GITLAB_URL}/api/v4/projects/${APP_PID}" \
-  --data "ci_inbound_job_token_scope_enabled=false" >/dev/null 2>&1 || true
+# Allow CI_JOB_TOKEN to push to this project's git repo. Default is FALSE for
+# security; without this, update-manifest's `git push origin HEAD:main` returns
+# "You are not allowed to push code to this project" (HTTP 403). Requires JSON
+# body with a PUT (POST/form-encoded doesn't update this field on our GitLab).
+curl -sk -X PUT "${GITLAB_URL}/api/v4/projects/${APP_PID}" \
+  -H "PRIVATE-TOKEN: ${GITLAB_PAT}" -H "Content-Type: application/json" \
+  -d '{"ci_push_repository_for_job_token_allowed":true}' >/dev/null 2>&1 || true
 
 # Unprotect main so the initial seed can force-push
 gl_api --request DELETE "${GITLAB_URL}/api/v4/projects/${APP_PID}/protected_branches/main" >/dev/null 2>&1 || true

@@ -24,6 +24,9 @@ stages:
   - update-manifest
 
 variables:
+  # In-cluster GitLab uses a self-signed router cert; the built-in get_sources
+  # step (git clone) needs this to succeed. Remove in customer envs with real TLS.
+  GIT_SSL_NO_VERIFY: "true"
   IMAGE: "${JFROG_URL}/${JFROG_REPO}/sample-app"
 
 workflow:
