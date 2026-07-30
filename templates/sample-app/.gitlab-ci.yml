@@ -1,36 +1,38 @@
-# CI/CD pipeline for sample-app.
+# CI/CD pipeline for sample-app (MONOREPO — app source + gitops in same project).
 #
-#   build-image      -> buildah builds the image, pushes to JFrog Artifactory
+#   build-image      -> buildah builds app/ and pushes to JFrog Artifactory,
 #                       tagged with the git commit short SHA.
-#   update-manifest  -> clones the sample-app-gitops project and bumps
-#                       overlays/dev/kustomization.yaml newTag. ArgoCD then
-#                       auto-syncs the dev environment.
+#   update-manifest  -> bumps gitops/overlays/dev/kustomization.yaml newTag and
+#                       pushes the commit back to THIS repo (main). ArgoCD then
+#                       auto-syncs sample-app-dev.
 #
-# Promotion to prod is done by a MR in sample-app-gitops that changes
-# overlays/prod/kustomization.yaml newTag. NOT automated here.
+# Promotion to prod = a separate MR in THIS repo that changes
+# gitops/overlays/prod/kustomization.yaml newTag. NOT automated here.
 #
-# CI/CD variables required (set by install.sh; visible under Settings > CI/CD):
-#   JFROG_URL              e.g. company.jfrog.io      (host only, no protocol)
-#   JFROG_REPO             e.g. docker-local          (Docker repo name)
-#   JFROG_USER             JFrog identity (email/user)
-#   JFROG_TOKEN            JFrog access token (masked, protected)
-#   GITOPS_DEPLOY_TOKEN    Project access token on sample-app-gitops with
-#                          write_repository scope (masked, protected)
-#   GITOPS_PROJECT_URL     e.g. gitlab.example.com/root/sample-app-gitops
-#                          (host + path, no scheme, no .git)
+# CI/CD variables required (Settings > CI/CD > Variables — set by install.sh):
+#   JFROG_URL   e.g. company.jfrog.io      (host only, no protocol)
+#   JFROG_REPO  e.g. docker-local          (Docker repo name in Artifactory)
+#   JFROG_USER  JFrog identity
+#   JFROG_TOKEN JFrog access token (masked)
+#
+# Push-back to the gitops overlay uses CI_JOB_TOKEN — no long-lived credential
+# to rotate. Requires "CI_JOB_TOKEN allowed to push" (default true on new
+# projects in GitLab 16+; install.sh sets it explicitly).
 
 stages:
   - build
   - update-manifest
 
 variables:
-  # GitLab uses a self-signed router cert in the demo cluster; skip verify for git.
-  GIT_SSL_NO_VERIFY: "true"
   IMAGE: "${JFROG_URL}/${JFROG_REPO}/sample-app"
 
 workflow:
   rules:
+    # Only build on main, only when app code (or the pipeline file) changes,
+    # skip commits marked [skip ci] — the update-manifest commit itself is
+    # marked [skip ci] AND only touches gitops/, so it cannot re-trigger.
     - if: '$CI_COMMIT_BRANCH == "main" && $CI_COMMIT_MESSAGE !~ /\[skip ci\]/'
+      changes: [ 'app/**', '.gitlab-ci.yml' ]
 
 build-image:
   stage: build
@@ -39,6 +41,7 @@ build-image:
     STORAGE_DRIVER: vfs
     BUILDAH_FORMAT: docker
   script:
+    - 'cd app'
     - 'echo "Building ${IMAGE}:${CI_COMMIT_SHORT_SHA}"'
     - 'buildah bud --build-arg APP_VERSION="${CI_COMMIT_SHORT_SHA}" -t "${IMAGE}:${CI_COMMIT_SHORT_SHA}" -f Dockerfile .'
     - 'buildah login -u "${JFROG_USER}" -p "${JFROG_TOKEN}" "${JFROG_URL}"'
@@ -47,15 +50,13 @@ build-image:
 update-manifest:
   stage: update-manifest
   image: registry.access.redhat.com/ubi9/ubi:latest
-  variables:
-    GIT_STRATEGY: none          # nothing to fetch from THIS repo
   script:
     - 'dnf install -y git >/dev/null'
-    - 'git clone "https://oauth2:${GITOPS_DEPLOY_TOKEN}@${GITOPS_PROJECT_URL}.git" repo'
-    - 'cd repo/overlays/dev'
-    - 'sed -i -E "s|(newTag:).*|\1 \"${CI_COMMIT_SHORT_SHA}\"|" kustomization.yaml'
+    - 'sed -i -E "s|(newTag:)[[:space:]]*\"[^\"]*\"|\1 \"${CI_COMMIT_SHORT_SHA}\"|" gitops/overlays/dev/kustomization.yaml'
     - 'git config user.email "ci@gitlab.demo"'
     - 'git config user.name "GitLab CI"'
-    - 'git diff --quiet && exit 0 || true'
-    - 'git commit -am "dev: bump sample-app to ${CI_COMMIT_SHORT_SHA} [skip ci]"'
+    - 'git remote set-url origin "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"'
+    - 'git add gitops/overlays/dev/kustomization.yaml'
+    - 'git diff --cached --quiet && echo "no change" && exit 0 || true'
+    - 'git commit -m "dev: bump sample-app to ${CI_COMMIT_SHORT_SHA} [skip ci]"'
     - 'git push origin HEAD:main'

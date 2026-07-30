@@ -2,14 +2,13 @@
 # Customer variables reference
 # =============================================================================
 # Every value in this file is a placeholder to substitute for the customer's
-# real environment. Names here match those in install.sh, .gitlab-ci.yml,
+# real environment. Names match those in install.sh, .gitlab-ci.yml,
 # templates/, and deploy/*.yaml.
 #
 # In the demo, install.sh derives most of these automatically from the target
 # OpenShift cluster and the JFrog creds file. For a customer implementation
-# they'll want to hand-configure these, since GitLab and JFrog are already
-# established parts of their infrastructure — not something install.sh
-# provisions.
+# they'll hand-configure these, since GitLab and JFrog are already established
+# parts of their infrastructure — not something install.sh provisions.
 # =============================================================================
 
 
@@ -17,12 +16,11 @@ cluster:
   # OpenShift API server. install.sh reads this from `oc whoami --show-server`.
   api:            "https://api.<cluster>:6443"
 
-  # Wildcard suffix under which OpenShift Routes are served. install.sh reads
-  # this from `oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'`.
+  # Wildcard suffix under which OpenShift Routes are served.
   apps_domain:    "apps.<cluster>.example.com"
 
   # OpenShift GitOps operator subscription channel. On OCP 4.21 use `latest`.
-  # On OCP 4.12 use `gitops-1.8` or `gitops-1.9` (older ArgoCD versions).
+  # On OCP 4.12 use `gitops-1.8` or `gitops-1.9`.
   gitops_channel: "latest"
 
 
@@ -31,15 +29,15 @@ gitlab:
   # (host: gitlab.apps.<domain>); production uses their real instance.
   host:           "gitlab.example.com"
 
-  # Group under which the two projects live.
+  # Group path.
   group:          "cicd-demo"
 
-  # Individual projects. install.sh creates root/sample-app and
-  # root/sample-app-gitops; customer typically uses a real group path.
-  app_project:    "cicd-demo/sample-app"
-  gitops_project: "cicd-demo/sample-app-gitops"
+  # THE monorepo project — application source, CI pipeline, and gitops manifests
+  # all in one place. install.sh creates root/sample-app; customer would use
+  # something like cicd-demo/sample-app.
+  project:        "cicd-demo/sample-app"
 
-  # Whether GitLab is EE (unlocks approval rules, pull mirrors, MR trains).
+  # GitLab EE unlocks approval rules, merge trains, container scanning.
   edition:        "ee"
 
 
@@ -67,42 +65,42 @@ tls:
   # *.apps.<domain>. In production, use cert-manager + Let's Encrypt or
   # the customer's internal CA.
   strategy:       "cert-manager"
-  ca_secret:      "corporate-ca-bundle"   # in argocd-tls-certs-cm if internal CA
+  ca_secret:      "corporate-ca-bundle"
 
 
 argocd:
-  # Namespace where OpenShift GitOps controller runs (default of the operator).
   namespace:      "openshift-gitops"
 
-  # Applications this reference creates. Customer typically has more.
+  # Both Applications target the SAME monorepo, different paths inside it.
   applications:
     - name:       "sample-app-dev"
-      overlay:    "overlays/dev"
+      path:       "gitops/overlays/dev"
       namespace:  "sample-app-dev"
       auto_sync:  true
     - name:       "sample-app-prod"
-      overlay:    "overlays/prod"
+      path:       "gitops/overlays/prod"
       namespace:  "sample-app-prod"
-      auto_sync:  false   # PR-gated in real prod
+      auto_sync:  false          # MR-gated in real prod
 
 
 workloads:
-  # Where the deployed app pods run. Named per environment.
   dev_namespace:  "sample-app-dev"
   prod_namespace: "sample-app-prod"
 
-  # ImagePullSecret referenced by the Deployment (kubectl get deploy -o yaml).
-  # install.sh creates this in each namespace, populated from jfrog.* above.
+  # ImagePullSecret referenced by the Deployment.
+  # install.sh creates this in each namespace from jfrog.* above.
   pull_secret:    "jfrog-pull"
 
 
 ci_variables:
   # These are set on the sample-app GitLab project's Settings > CI/CD > Variables.
-  # install.sh sets them from the JFrog creds file + a project access token
-  # created on the gitops project.
+  # install.sh sets them from the JFrog creds file. Just four — no cross-project
+  # tokens, because monorepo push-back uses CI_JOB_TOKEN.
   JFROG_URL:            "→ jfrog.url"
   JFROG_REPO:           "→ jfrog.repo"
   JFROG_USER:           "→ jfrog.ci_user"
   JFROG_TOKEN:          "→ jfrog.ci_token (masked)"
-  GITOPS_DEPLOY_TOKEN:  "project access token on gitlab.gitops_project with write_repository scope"
-  GITOPS_PROJECT_URL:   "gitlab.host/gitlab.gitops_project  (no scheme, no .git)"
+
+  # NOT needed (removed vs the split-repo pattern):
+  #   GITOPS_DEPLOY_TOKEN — CI_JOB_TOKEN handles this
+  #   GITOPS_PROJECT_URL  — CI_SERVER_HOST + CI_PROJECT_PATH are built-in

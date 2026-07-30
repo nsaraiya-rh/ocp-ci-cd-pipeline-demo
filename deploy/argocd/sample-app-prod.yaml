@@ -1,9 +1,8 @@
 ---
-# ArgoCD Application: prod environment.
-# NOT auto-synced. Promotion is a reviewed MR in sample-app-gitops that changes
-# overlays/prod/kustomization.yaml newTag. Once merged, a human syncs this
-# Application from the ArgoCD UI (or CLI), OR you flip syncPolicy.automated on
-# once you're comfortable running unattended.
+# ArgoCD Application: prod environment (monorepo).
+# NOT auto-synced. Promotion is a reviewed MR in the same sample-app project
+# that changes gitops/overlays/prod/kustomization.yaml newTag. Once merged,
+# a human syncs this Application from the ArgoCD UI (or CLI).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -13,9 +12,9 @@ spec:
   project: default
   source:
     # Substituted by install.sh with the actual GitLab host.
-    repoURL: https://__GITLAB_HOST__/root/sample-app-gitops.git
+    repoURL: https://__GITLAB_HOST__/root/sample-app.git
     targetRevision: main
-    path: overlays/prod
+    path: gitops/overlays/prod
   destination:
     server: https://kubernetes.default.svc
     namespace: sample-app-prod

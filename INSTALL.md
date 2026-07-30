@@ -1,8 +1,8 @@
 # Installing on an OpenShift cluster
 
 One command deploys the whole reference pipeline: OpenShift GitOps (ArgoCD),
-an in-cluster GitLab, a privileged GitLab Runner, two GitLab projects seeded
-from `templates/`, dev + prod ArgoCD Applications, and a GitLab → ArgoCD
+an in-cluster GitLab, a privileged GitLab Runner, ONE GitLab project (monorepo)
+seeded from `templates/`, dev + prod ArgoCD Applications, and a GitLab → ArgoCD
 push webhook — with JFrog Artifactory as the image registry.
 
 ## Prerequisites
@@ -10,7 +10,7 @@ push webhook — with JFrog Artifactory as the image registry.
 | Requirement | Notes |
 |---|---|
 | OpenShift cluster | 4.14+, cluster-admin. Tested on 4.21 (drop-ins for 4.12 in troubleshooting below). |
-| `oc`, `helm`, `git` | on `PATH` |
+| `oc`, `helm`, `git`, `openssl`, `python3` | on `PATH` |
 | Cluster resources | ~8 vCPU / 16 GiB free. GitLab bundles PostgreSQL, Redis, MinIO, Gitaly. |
 | JFrog registry | JFrog Cloud (free tier is fine) or self-hosted Artifactory with a Docker repo |
 
@@ -29,9 +29,8 @@ EOF
 chmod 600 ~/.config/ocp-clusters/jfrog-creds.txt
 ```
 
-The `JFROG_URL` is the host only (no `https://`). The `JFROG_REPO` is the
-name of your Docker repository *inside* Artifactory (the segment you see
-under **Application → Artifactory → Repositories**).
+`JFROG_URL` is the host only (no `https://`). `JFROG_REPO` is the Docker
+repository name *inside* Artifactory.
 
 ## Run
 
@@ -56,8 +55,8 @@ waiting for GitLab.
 | 5 | GitLab via Helm (chart 9.11.8) | Chart 10+ dropped bundled PG/Redis/MinIO — we pin 9.11.8 |
 | 6 | Root PAT + GitLab Runner registration | Reuses existing runner if one is registered |
 | 7 | GitLab Runner Helm chart 0.88.4 | Kubernetes executor, `gitlab-runner-sa` with privileged SCC |
-| 8 | Create `root/sample-app` + `root/sample-app-gitops` projects, seed from `templates/`, set CI variables + project access token | Skips seeding if a project already has commits — delete the project in GitLab to reseed |
-| 9 | ArgoCD wiring: trust GitLab CA, Repository secret, dev + prod Applications, GitLab push webhook | Repo access uses the same project access token as CI (write_repository scope) |
+| 8 | **One** GitLab project (`root/sample-app`, monorepo), seed from `templates/`, set 4 CI variables, create a `read_repository` deploy token for ArgoCD | Skips seeding if the project already has commits — delete the project in GitLab to reseed |
+| 9 | ArgoCD wiring: trust GitLab CA, Repository secret, dev + prod Applications, GitLab push webhook | Both Applications target the same repo, different `path:` |
 
 ## After install
 
@@ -68,56 +67,58 @@ same info to your terminal. Consider copying it to
 Try it end to end:
 
 ```bash
-# 1. Clone the sample-app project from GitLab
-git -c http.sslVerify=false clone https://oauth2:<GITLAB_ROOT_PAT>@<GITLAB_HOST>/root/sample-app.git
+# 1. Clone the monorepo from GitLab
+git -c http.sslVerify=false clone \
+    https://oauth2:<GITLAB_ROOT_PAT>@<GITLAB_HOST>/root/sample-app.git
 
-# 2. Edit sample-app/app.py MESSAGE
+# 2. Edit app/app.py MESSAGE
 # 3. Commit + push
 git commit -am "test: change message" && git push
 
 # 4. Watch it flow:
-#    - GitLab pipeline builds + pushes to JFrog
-#    - update-manifest bumps sample-app-gitops/overlays/dev/kustomization.yaml
+#    - GitLab pipeline builds app/ + pushes to JFrog
+#    - update-manifest bumps gitops/overlays/dev/kustomization.yaml
+#      (pushes back to the SAME repo using CI_JOB_TOKEN)
 #    - ArgoCD auto-syncs sample-app-dev
-#    - app comes up at https://sample-app-sample-app-dev.apps.<cluster>
+#    - app is live at https://sample-app-sample-app-dev.apps.<cluster>
 ```
 
-To promote dev → prod (this simulates what a release manager does):
+To promote dev → prod (simulates what a release manager does):
 
 ```bash
-git -c http.sslVerify=false clone https://oauth2:<PAT>@<GITLAB_HOST>/root/sample-app-gitops.git
-cd sample-app-gitops
-# copy the tag from dev to prod
-DEV_TAG=$(grep -E '^\s*newTag:' overlays/dev/kustomization.yaml | awk '{print $2}' | tr -d '"')
-sed -i.bak "s|(newTag:).*|\\1 \"$DEV_TAG\"|" overlays/prod/kustomization.yaml
+cd sample-app
+DEV_TAG=$(grep -E '^\s*newTag:' gitops/overlays/dev/kustomization.yaml \
+          | awk '{print $2}' | tr -d '"')
+sed -i.bak -E "s|(newTag:)[[:space:]]*\"[^\"]*\"|\\1 \"$DEV_TAG\"|" \
+    gitops/overlays/prod/kustomization.yaml
 git commit -am "promote: sample-app $DEV_TAG dev -> prod [skip ci]"
 git push
 
 # ArgoCD's prod Application does NOT auto-sync (by design).
 # Sync it manually from the UI, or:
 oc annotate application sample-app-prod -n openshift-gitops \
-  argocd.argoproj.io/refresh=hard --overwrite
-oc patch application sample-app-prod -n openshift-gitops --type=merge -p \
-  '{"operation":{"sync":{"revision":"main"}}}'
+   argocd.argoproj.io/refresh=hard --overwrite
+oc patch application sample-app-prod -n openshift-gitops --type=merge \
+   -p '{"operation":{"sync":{"revision":"main"}}}'
 ```
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `helm ... failed pre-install: timed out` | `gitlab-anyuid` SCC isn't bound. `install.sh` applies it — check `oc get scc gitlab-anyuid`. Then `helm uninstall gitlab -n gitlab-system` + re-run. |
-| `git clone` from ArgoCD fails with `x509: certificate is valid for *.apps.<other>...` | Stale cert in `.install-output/certs/`. Delete the dir and re-run — install.sh will regenerate for the current apps domain. |
-| `Access denied` on `git clone` from CI | Project access token was revoked. `install.sh` cleans up + creates a new one on re-run; if the CI variable is stale, delete `GITOPS_DEPLOY_TOKEN` in GitLab UI + re-run. |
-| CI pipeline stays pending, no jobs | Push happened on a branch other than `main`, or commit message contains `[skip ci]`. Workflow `rules:` filters both. |
+| `helm ... failed pre-install: timed out` | `gitlab-anyuid` SCC isn't bound. Check `oc get scc gitlab-anyuid`. Then `helm uninstall gitlab -n gitlab-system` + re-run. |
+| ArgoCD repo error `x509: certificate is valid for *.apps.<other>...` | Stale cert in `.install-output/certs/`. Delete the dir and re-run — install.sh regenerates for the current apps domain. |
+| CI's `update-manifest` fails on `git push` with 403 | `CI_JOB_TOKEN` isn't allowed to push. In GitLab UI: Project → Settings → CI/CD → Job token permissions → allow the current project. |
+| CI pipeline stays pending, no jobs | Push happened on a branch other than `main`, or commit message contains `[skip ci]`, or only `gitops/**` changed. Workflow `rules:` filter on `app/**` + `.gitlab-ci.yml` — deployment-bookkeeping commits don't trigger builds. |
 | Dev pods `ImagePullBackOff` right after install | Expected briefly — no image built yet. Push a commit; first pipeline builds + tags + syncs dev. |
-| GitLab webservice never becomes ready | Slow cluster. `install.sh` waits up to 45 min. Check `oc get pods -n gitlab-system`; usually PVC/migrations. |
+| GitLab webservice never ready | Slow cluster. `install.sh` waits up to 45 min. Check `oc get pods -n gitlab-system`; usually PVC/migrations. |
 | Running on OpenShift 4.12 | Older OpenShift GitOps operator (v1.8/1.9) — should just work; older `restricted` SCC instead of `restricted-v2`. Custom `gitlab-anyuid` SCC unchanged. If chart 9.11.8 rejects K8s 1.25, try chart 8.x. |
 
 ## Reprovisioning to a new cluster
 
 Same command — `./install.sh` — after you `oc login` to the new cluster.
-Because everything is auto-detected from the cluster's apps domain and
-regenerated where necessary, no code edits are required.
+Everything is auto-detected from the cluster's apps domain and regenerated
+where necessary, no code edits.
 
 Before running the second time, if you plan to keep the old cluster
 credentials around, back them up:

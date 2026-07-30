@@ -1,7 +1,7 @@
 ---
-# ArgoCD Application: dev environment.
-# Auto-syncs from GitLab sample-app-gitops repo, overlays/dev path.
-# CI in sample-app bumps the image tag here on every merge to main.
+# ArgoCD Application: dev environment (monorepo).
+# Auto-syncs from the sample-app project's gitops/overlays/dev path.
+# CI in the same project bumps the image tag here on every merge to main.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -11,9 +11,9 @@ spec:
   project: default
   source:
     # Substituted by install.sh with the actual GitLab host.
-    repoURL: https://__GITLAB_HOST__/root/sample-app-gitops.git
+    repoURL: https://__GITLAB_HOST__/root/sample-app.git
     targetRevision: main
-    path: overlays/dev
+    path: gitops/overlays/dev
   destination:
     server: https://kubernetes.default.svc
     namespace: sample-app-dev

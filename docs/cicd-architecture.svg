@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 600" role="img"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 620" role="img"
      aria-labelledby="diagram-title" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
-  <title id="diagram-title">GitOps CI/CD architecture: GitLab is source of truth; JFrog Artifactory holds images; ArgoCD reconciles two environments (dev auto-sync, prod manual).</title>
+  <title id="diagram-title">Monorepo CI/CD architecture: one GitLab project holds application source, CI pipeline, and gitops manifests. JFrog Artifactory holds images. ArgoCD watches two paths inside the same repo (dev auto-sync, prod manual).</title>
 
   <defs>
     <marker id="arrow-ci" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -20,127 +20,143 @@
       .arrow-sub  { fill:#5C6875; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size:10px; }
       .cluster-lbl{ fill:#5C6875; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size:11px; letter-spacing:0.12em; text-transform:uppercase; }
       .env-lbl    { fill:#1F6F7E; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size:11px; font-weight:600; letter-spacing:0.06em; }
+      .repo-inner { fill:#24303C; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size:11px; }
     </style>
   </defs>
 
-  <rect x="0" y="0" width="1120" height="600" fill="#FFFFFF"/>
+  <rect x="0" y="0" width="1120" height="620" fill="#FFFFFF"/>
 
   <!-- OpenShift cluster boundary -->
-  <rect x="30" y="240" width="1060" height="340" rx="8" fill="#EEF1F4" stroke="#CBD3DB" stroke-dasharray="6 4"/>
-  <text x="50" y="268" class="cluster-lbl">OpenShift cluster</text>
+  <rect x="30" y="270" width="1060" height="330" rx="8" fill="#EEF1F4" stroke="#CBD3DB" stroke-dasharray="6 4"/>
+  <text x="50" y="298" class="cluster-lbl">OpenShift cluster</text>
 
   <!-- Developer -->
   <g>
     <circle cx="80" cy="80" r="22" fill="#FFFFFF" stroke="#24303C" stroke-width="1.5"/>
     <text x="80" y="86" text-anchor="middle" class="title" font-size="16">👤</text>
     <text x="80" y="128" text-anchor="middle" class="title">Developer</text>
-    <text x="80" y="146" text-anchor="middle" class="sub">edits sample-app</text>
+    <text x="80" y="146" text-anchor="middle" class="sub">edits app/</text>
   </g>
 
-  <!-- GitLab (source of truth) — dashed on OUTSIDE of cluster to mean "in customer's real
-       env this lives on the enterprise GitLab; in the demo it's inside the cluster" -->
+  <!-- Release Manager -->
   <g>
-    <rect x="200" y="45" width="290" height="130" rx="6" fill="#FFFFFF" stroke="#B96A1F" stroke-width="1.5"/>
-    <text x="345" y="72" text-anchor="middle" class="title">GitLab Enterprise</text>
-    <text x="345" y="92" text-anchor="middle" class="sub">source of truth · runs CI</text>
-    <text x="345" y="115" text-anchor="middle" class="sub">root/sample-app</text>
-    <text x="345" y="132" text-anchor="middle" class="sub">root/sample-app-gitops</text>
-    <text x="345" y="156" text-anchor="middle" class="sub">.gitlab-ci.yml · workflow rules</text>
+    <circle cx="80" cy="220" r="22" fill="#FFFFFF" stroke="#24303C" stroke-width="1.5"/>
+    <text x="80" y="226" text-anchor="middle" class="title" font-size="16">🔒</text>
+    <text x="80" y="266" text-anchor="middle" class="sub">release manager</text>
+    <text x="80" y="280" text-anchor="middle" class="sub">MR: edit gitops/overlays/prod</text>
   </g>
 
-  <!-- JFrog registry — external to cluster -->
+  <!-- Monorepo (single project) -->
   <g>
-    <rect x="560" y="45" width="290" height="130" rx="6" fill="#FFFFFF" stroke="#B96A1F" stroke-width="1.5"/>
-    <text x="705" y="72" text-anchor="middle" class="title">JFrog Artifactory</text>
-    <text x="705" y="92" text-anchor="middle" class="sub">docker registry</text>
-    <text x="705" y="115" text-anchor="middle" class="sub">sample-app :&lt;commit-sha&gt;</text>
-    <text x="705" y="132" text-anchor="middle" class="sub">Xray scanning</text>
-    <text x="705" y="156" text-anchor="middle" class="sub">retention policy</text>
+    <rect x="220" y="45" width="320" height="200" rx="6" fill="#FFFFFF" stroke="#B96A1F" stroke-width="1.5"/>
+    <text x="380" y="70" text-anchor="middle" class="title">GitLab · root/sample-app</text>
+    <text x="380" y="88" text-anchor="middle" class="sub">ONE project · monorepo</text>
+    <line x1="240" y1="102" x2="520" y2="102" stroke="#E1E5EA"/>
+    <text x="240" y="120" class="repo-inner">app/</text>
+    <text x="380" y="120" text-anchor="middle" class="sub">source + Dockerfile</text>
+    <text x="240" y="140" class="repo-inner">gitops/base/</text>
+    <text x="380" y="140" text-anchor="middle" class="sub">shared manifests</text>
+    <text x="240" y="160" class="repo-inner">gitops/overlays/dev/</text>
+    <text x="380" y="160" text-anchor="middle" class="sub">auto-synced</text>
+    <text x="240" y="180" class="repo-inner">gitops/overlays/prod/</text>
+    <text x="380" y="180" text-anchor="middle" class="sub">MR-gated</text>
+    <text x="240" y="200" class="repo-inner">.gitlab-ci.yml</text>
+    <text x="380" y="200" text-anchor="middle" class="sub">2 stages</text>
+    <text x="380" y="225" text-anchor="middle" class="env-lbl">workflow rules: app/** only</text>
   </g>
 
-  <!-- ===== Developer → GitLab ===== -->
-  <line x1="105" y1="80" x2="195" y2="80" stroke="#24303C" stroke-width="1.5" marker-end="url(#arrow-git)"/>
-  <text x="150" y="70" text-anchor="middle" class="arrow-label">1 · push</text>
+  <!-- JFrog registry -->
+  <g>
+    <rect x="620" y="45" width="290" height="130" rx="6" fill="#FFFFFF" stroke="#B96A1F" stroke-width="1.5"/>
+    <text x="765" y="72" text-anchor="middle" class="title">JFrog Artifactory</text>
+    <text x="765" y="92" text-anchor="middle" class="sub">docker registry</text>
+    <text x="765" y="115" text-anchor="middle" class="sub">sample-app :&lt;commit-sha&gt;</text>
+    <text x="765" y="132" text-anchor="middle" class="sub">Xray scanning</text>
+    <text x="765" y="156" text-anchor="middle" class="sub">retention policy</text>
+  </g>
+
+  <!-- 1. Developer → GitLab (push to app/) -->
+  <line x1="105" y1="80" x2="215" y2="80" stroke="#24303C" stroke-width="1.5" marker-end="url(#arrow-git)"/>
+  <text x="160" y="70" text-anchor="middle" class="arrow-label">1 · push to app/</text>
+
+  <!-- 6. Release manager → GitLab (MR editing gitops/overlays/prod) -->
+  <line x1="105" y1="220" x2="215" y2="220" stroke="#24303C" stroke-width="1.5" marker-end="url(#arrow-git)" stroke-dasharray="5 3"/>
+  <text x="160" y="210" text-anchor="middle" class="arrow-label">6 · promote MR</text>
 
   <!-- ===== CLUSTER CONTENTS ===== -->
 
   <!-- GitLab Runner -->
   <g>
-    <rect x="60" y="290" width="260" height="105" rx="6" fill="#FFFFFF" stroke="#B96A1F" stroke-width="1.5"/>
-    <text x="190" y="318" text-anchor="middle" class="title">GitLab Runner</text>
-    <text x="190" y="336" text-anchor="middle" class="sub">kubernetes executor</text>
-    <text x="190" y="354" text-anchor="middle" class="sub">buildah pod per job</text>
-    <text x="190" y="372" text-anchor="middle" class="sub">privileged SCC (dev only)</text>
+    <rect x="60" y="320" width="260" height="105" rx="6" fill="#FFFFFF" stroke="#B96A1F" stroke-width="1.5"/>
+    <text x="190" y="348" text-anchor="middle" class="title">GitLab Runner</text>
+    <text x="190" y="366" text-anchor="middle" class="sub">kubernetes executor</text>
+    <text x="190" y="384" text-anchor="middle" class="sub">buildah pod per job</text>
+    <text x="190" y="402" text-anchor="middle" class="sub">privileged SCC (dev only)</text>
   </g>
-  <path d="M 190 290 L 190 265 L 345 265 L 345 175" stroke="#8592A0" stroke-width="1" stroke-dasharray="3 3" fill="none"/>
-  <text x="200" y="280" class="arrow-sub">polls (pull)</text>
+  <path d="M 190 320 L 190 295 L 380 245" stroke="#8592A0" stroke-width="1" stroke-dasharray="3 3" fill="none"/>
+  <text x="205" y="310" class="arrow-sub">polls (pull)</text>
 
   <!-- ArgoCD -->
   <g>
-    <rect x="410" y="290" width="260" height="105" rx="6" fill="#FFFFFF" stroke="#1F6F7E" stroke-width="1.5"/>
-    <text x="540" y="318" text-anchor="middle" class="title">ArgoCD</text>
-    <text x="540" y="336" text-anchor="middle" class="sub">openshift-gitops</text>
-    <text x="540" y="354" text-anchor="middle" class="sub">2 Applications (dev + prod)</text>
-    <text x="540" y="372" text-anchor="middle" class="sub">GitLab CA trusted · webhook</text>
+    <rect x="410" y="320" width="260" height="105" rx="6" fill="#FFFFFF" stroke="#1F6F7E" stroke-width="1.5"/>
+    <text x="540" y="348" text-anchor="middle" class="title">ArgoCD</text>
+    <text x="540" y="366" text-anchor="middle" class="sub">openshift-gitops</text>
+    <text x="540" y="384" text-anchor="middle" class="sub">2 Applications (dev + prod)</text>
+    <text x="540" y="402" text-anchor="middle" class="sub">same repo · different path:</text>
   </g>
 
   <!-- Dev environment -->
   <g>
-    <rect x="740" y="290" width="330" height="105" rx="6" fill="#FFFFFF" stroke="#1F6F7E" stroke-width="1.5"/>
-    <text x="905" y="316" text-anchor="middle" class="env-lbl">DEV · sample-app-dev</text>
-    <text x="905" y="336" text-anchor="middle" class="sub">auto-sync · prune · self-heal</text>
-    <text x="905" y="356" text-anchor="middle" class="sub">Deployment · Service · Route</text>
-    <text x="905" y="376" text-anchor="middle" class="sub">2 replicas</text>
+    <rect x="740" y="320" width="330" height="105" rx="6" fill="#FFFFFF" stroke="#1F6F7E" stroke-width="1.5"/>
+    <text x="905" y="346" text-anchor="middle" class="env-lbl">DEV · sample-app-dev</text>
+    <text x="905" y="366" text-anchor="middle" class="sub">auto-sync · prune · self-heal</text>
+    <text x="905" y="386" text-anchor="middle" class="sub">path: gitops/overlays/dev</text>
+    <text x="905" y="406" text-anchor="middle" class="sub">2 replicas</text>
   </g>
 
   <!-- Prod environment -->
   <g>
-    <rect x="740" y="440" width="330" height="105" rx="6" fill="#FFFFFF" stroke="#1F6F7E" stroke-width="1.5"/>
-    <text x="905" y="466" text-anchor="middle" class="env-lbl">PROD · sample-app-prod</text>
-    <text x="905" y="486" text-anchor="middle" class="sub">manual sync · MR-gated</text>
-    <text x="905" y="506" text-anchor="middle" class="sub">Deployment · Service · Route</text>
-    <text x="905" y="526" text-anchor="middle" class="sub">3 replicas</text>
+    <rect x="740" y="465" width="330" height="105" rx="6" fill="#FFFFFF" stroke="#1F6F7E" stroke-width="1.5"/>
+    <text x="905" y="491" text-anchor="middle" class="env-lbl">PROD · sample-app-prod</text>
+    <text x="905" y="511" text-anchor="middle" class="sub">manual sync · MR-gated</text>
+    <text x="905" y="531" text-anchor="middle" class="sub">path: gitops/overlays/prod</text>
+    <text x="905" y="551" text-anchor="middle" class="sub">3 replicas</text>
   </g>
 
   <!-- Users -->
   <g>
-    <circle cx="905" cy="580" r="14" fill="#FFFFFF" stroke="#1F6F7E" stroke-width="1.5"/>
-    <text x="905" y="586" text-anchor="middle" class="title" font-size="11">🌐</text>
+    <circle cx="905" cy="600" r="14" fill="#FFFFFF" stroke="#1F6F7E" stroke-width="1.5"/>
+    <text x="905" y="606" text-anchor="middle" class="title" font-size="11">🌐</text>
   </g>
 
   <!-- ===== ARROWS =====-->
 
-  <!-- 2. Runner → JFrog push (build) -->
-  <path d="M 320 340 Q 400 220 705 175" stroke="#B96A1F" stroke-width="1.8" fill="none" marker-end="url(#arrow-ci)"/>
-  <text x="470" y="230" class="arrow-label">2 · build + push</text>
-  <text x="470" y="246" class="arrow-sub">buildah</text>
+  <!-- 2. Runner → JFrog push -->
+  <path d="M 320 360 Q 470 240 620 145" stroke="#B96A1F" stroke-width="1.8" fill="none" marker-end="url(#arrow-ci)"/>
+  <text x="490" y="255" class="arrow-label">2 · build + push</text>
+  <text x="490" y="271" class="arrow-sub">buildah (app/)</text>
 
-  <!-- 3. Runner → GitLab (bump gitops dev tag) -->
-  <path d="M 320 375 Q 340 250 345 175" stroke="#B96A1F" stroke-width="1.8" fill="none" marker-end="url(#arrow-ci)" stroke-dasharray="5 3"/>
-  <text x="360" y="410" class="arrow-label">3 · bump dev tag</text>
-  <text x="360" y="426" class="arrow-sub">overlays/dev</text>
+  <!-- 3. Runner → same repo (bump gitops/overlays/dev via CI_JOB_TOKEN) -->
+  <path d="M 320 395 Q 350 300 380 245" stroke="#B96A1F" stroke-width="1.8" fill="none" marker-end="url(#arrow-ci)" stroke-dasharray="5 3"/>
+  <text x="335" y="450" class="arrow-label">3 · bump dev tag</text>
+  <text x="335" y="466" class="arrow-sub">CI_JOB_TOKEN → same repo</text>
 
   <!-- 4. GitLab webhook → ArgoCD -->
-  <path d="M 490 105 Q 540 200 540 285" stroke="#1F6F7E" stroke-width="1.8" fill="none" marker-end="url(#arrow-cd)"/>
-  <text x="555" y="180" class="arrow-label">4 · webhook (~2s)</text>
+  <path d="M 540 245 Q 540 290 540 315" stroke="#1F6F7E" stroke-width="1.8" fill="none" marker-end="url(#arrow-cd)"/>
+  <text x="555" y="285" class="arrow-label">4 · webhook (~2s)</text>
 
   <!-- 5. ArgoCD → dev (auto sync) -->
-  <line x1="670" y1="330" x2="735" y2="330" stroke="#1F6F7E" stroke-width="1.8" marker-end="url(#arrow-cd)"/>
-  <text x="702" y="322" text-anchor="middle" class="arrow-label">5 · sync</text>
-
-  <!-- 6. Release manager promotion arrow — MR in gitops repo -->
-  <path d="M 200 175 Q 200 460 735 480" stroke="#24303C" stroke-width="1.5" fill="none" marker-end="url(#arrow-git)" stroke-dasharray="5 3"/>
-  <text x="200" y="530" class="arrow-label">6 · MR in gitops</text>
-  <text x="200" y="546" class="arrow-sub">promote dev → prod</text>
+  <line x1="670" y1="365" x2="735" y2="365" stroke="#1F6F7E" stroke-width="1.8" marker-end="url(#arrow-cd)"/>
+  <text x="702" y="357" text-anchor="middle" class="arrow-label">5 · sync</text>
 
   <!-- 7. ArgoCD → prod (manual sync) -->
-  <path d="M 670 380 Q 700 445 735 480" stroke="#1F6F7E" stroke-width="1.8" fill="none" marker-end="url(#arrow-cd)"/>
-  <text x="675" y="435" class="arrow-label">7 · manual sync</text>
+  <path d="M 670 405 Q 700 470 735 500" stroke="#1F6F7E" stroke-width="1.8" fill="none" marker-end="url(#arrow-cd)"/>
+  <text x="675" y="460" class="arrow-label">7 · manual sync</text>
 
   <!-- 8. Dev + Prod pull from JFrog -->
-  <path d="M 900 290 Q 900 200 850 175" stroke="#1F6F7E" stroke-width="1.5" fill="none" marker-end="url(#arrow-cd)" stroke-dasharray="4 3"/>
-  <text x="965" y="245" text-anchor="middle" class="arrow-sub">image pull</text>
+  <path d="M 900 320 Q 900 220 910 175" stroke="#1F6F7E" stroke-width="1.5" fill="none" marker-end="url(#arrow-cd)" stroke-dasharray="4 3"/>
+  <text x="975" y="255" text-anchor="middle" class="arrow-sub">image pull</text>
 
   <!-- 9. Prod → users -->
-  <line x1="905" y1="545" x2="905" y2="565" stroke="#1F6F7E" stroke-width="1.5" marker-end="url(#arrow-cd)"/>
+  <line x1="905" y1="570" x2="905" y2="585" stroke="#1F6F7E" stroke-width="1.5" marker-end="url(#arrow-cd)"/>
 </svg>

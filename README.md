@@ -12,24 +12,33 @@ adapt for their own environment.
 
 ## The pattern
 
+Monorepo — **one GitLab project** holds application source, CI pipeline, and
+deployment manifests. ArgoCD watches two paths inside it (dev + prod overlays).
+
 ```
-Developer ── push ──► GitLab (sample-app)
-                          │ .gitlab-ci.yml
-                          ▼
-                     GitLab Runner (on OpenShift)
-                          │ buildah
-                          ▼
-                     JFrog Artifactory (Docker registry)
-                          │
-                          ▼   (CI's second stage)
-                     GitLab (sample-app-gitops) — bump image tag in overlays/dev
-                          │
-                          ▼   ArgoCD watches, auto-syncs
-                     OpenShift — sample-app-dev
-                          │
-                          │   promotion = MR in sample-app-gitops
-                          ▼   changing overlays/prod tag
-                     OpenShift — sample-app-prod  (manual/gated sync)
+Developer ── push ──►  GitLab (sample-app monorepo)
+                            ├── app/                          source, Dockerfile
+                            ├── gitops/base/                  shared manifests
+                            ├── gitops/overlays/dev/          auto-synced
+                            ├── gitops/overlays/prod/         MR-gated
+                            └── .gitlab-ci.yml
+                            │
+                            │ CI pipeline
+                            ▼
+                        GitLab Runner (on OpenShift)
+                            │ buildah
+                            ▼
+                        JFrog Artifactory (Docker registry)
+                            │
+                            ▼  (CI's second stage, same repo push)
+                        gitops/overlays/dev  ← image tag bumped
+                            │
+                            ▼  ArgoCD watches, auto-syncs
+                        OpenShift — sample-app-dev
+                            │
+                            │  promotion = MR editing gitops/overlays/prod
+                            ▼
+                        OpenShift — sample-app-prod (manual sync)
 ```
 
 ## Components deployed by `install.sh`
@@ -40,13 +49,13 @@ Developer ── push ──► GitLab (sample-app)
 | GitLab | `gitlab-system` | Source of truth + CI orchestration |
 | GitLab Runner | `gitlab-runner` | Job pods (Kubernetes executor, buildah) |
 | Two ArgoCD `Application`s | `openshift-gitops` | One per environment (dev / prod) |
-| Two GitLab projects | GitLab | `root/sample-app`, `root/sample-app-gitops` |
+| One GitLab project | GitLab | `root/sample-app` (monorepo) |
 | JFrog integration | GitLab CI vars + K8s pull secrets | Push from CI, pull to app namespaces |
 
 ## Install
 
 ```bash
-export GH_PAT=$(cat /path/to/github-pat)          # optional — kept if you back to GitHub
+export JFROG_CREDS_FILE=~/.config/ocp-clusters/jfrog-creds.txt
 oc login --token=... --server=https://api.<cluster>:6443
 ./install.sh
 ```
@@ -57,25 +66,36 @@ step-by-step of what happens.
 ## Repository layout
 
 ```
-install.sh                   Idempotent bootstrap. Reads .install-output/creds.
-deploy/                      Cluster manifests (SCC, operator subs, Helm values).
-docs/                        Architecture diagram + LogQL samples + variables ref.
-INSTALL.md                   Prerequisites, run, troubleshooting.
+install.sh                   Idempotent bootstrap. Reads JFROG_CREDS_FILE.
+deploy/                      Cluster manifests (SCC, operator subs, Helm values,
+                             ArgoCD Applications for dev + prod).
+templates/sample-app/        Seed content for the GitLab project — pushed at
+                             install time. This IS what the customer's team
+                             will lift and adapt (rename, rewire).
+docs/                        Architecture diagram, LogQL query samples,
+                             customer variables reference.
+INSTALL.md                   Prereqs, run, troubleshooting.
 ```
 
-Application source and manifests live in GitLab and are created by
-`install.sh` in the target GitLab. Their contents are seeded from templates
-inside this repo the first time `install.sh` runs.
+## Why monorepo
+
+- **One credential surface** — CI push-back to the gitops overlay uses the
+  built-in `CI_JOB_TOKEN`. No cross-project access tokens, no rotation.
+- **One webhook, one Repository secret** in ArgoCD.
+- **Simpler for small teams** — everything an app owns lives in one place.
+
+The alternative — **split repos** (source repo + gitops repo) — is often the
+right call at scale, because it lets MR approval rules structurally enforce
+"prod deploy requires SRE sign-off". Ask when it applies to the target env.
 
 ## For the customer implementation
 
-This reference deploys everything onto a single cluster with in-cluster GitLab
-and JFrog Cloud (free tier) for demo compactness. In a real environment:
+This reference deploys onto a single cluster with in-cluster GitLab and JFrog
+Cloud (free tier) for demo compactness. In a real environment:
 
-- Point `install.sh` at your **existing GitLab Enterprise** (skip the in-cluster
-  GitLab install and the runner registration will target your GitLab instead).
+- Point CI at your **existing GitLab Enterprise** (skip the in-cluster GitLab
+  install; runner registration targets your GitLab instead).
 - Point CI at your **existing JFrog Artifactory** (registry URL + creds only).
-- Deploy **ArgoCD in each target cluster** (the operator subscription is the
-  same; the `Application`s and `Repository` secret are portable).
+- Deploy **ArgoCD in each target cluster** (same operator subscription).
 - See **[docs/customer-variables.yaml](docs/customer-variables.yaml)** for the
   full list of values you'd substitute.
