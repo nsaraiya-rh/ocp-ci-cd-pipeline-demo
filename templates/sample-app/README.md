@@ -24,7 +24,8 @@ gitops/                  Kustomize manifests
 ## How to promote dev → prod
 
 1. Open a **merge request `dev` → `main`**.
-2. Get it approved and merge. The `promote-prod` job copies dev's current image
+2. Get it approved and merge — **leave "Delete source branch" unchecked** (the
+   `dev` branch is permanent). The `promote-prod` job copies dev's current image
    tag into `gitops/overlays/prod/kustomization.yaml` on `main` — **no rebuild**,
    the exact image dev ran.
 3. Open `sample-app-prod` in ArgoCD and click **Sync**.

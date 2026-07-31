@@ -77,7 +77,8 @@ namespaces you label. Nothing here grants standing privileges outside
 | Object | Purpose |
 |---|---|
 | One project (`<group>/sample-app`) | App source + gitops manifests + `.gitlab-ci.yml` |
-| A long-lived **`dev` branch** | Drives the dev environment; developers commit here |
+| A long-lived **`dev` branch** | Drives the dev environment; developers commit here. Must survive every merge — see the "keep source branch" note below. |
+| Project setting: *remove source branch after merge = OFF* | Keeps the permanent `dev` branch from being deleted when a promotion MR merges |
 | 4 CI/CD variables | JFrog registry URL, repo, user, token (masked + protected) |
 | Project setting: *CI_JOB_TOKEN allowed to push* | Lets the pipeline commit the image-tag bump back to the repo |
 | Protected `main` + MR approval rule | The `dev`→`main` MR is the prod gate; require an approval to merge |
@@ -189,7 +190,7 @@ Project → **Settings → CI/CD → Job token permissions** → allow this proj
 push to its own repository. Without this, the pipeline's tag-bump commit fails
 with `HTTP 403 — You are not allowed to push code`.
 
-### A4 · Protect branches
+### A4 · Protect branches + keep `dev` permanent
 
 Project → **Settings → Repository → Protected branches**: protect `main`
 (allow the CI/bot to push, so `promote-prod` can commit the prod tag). Then add
@@ -197,6 +198,12 @@ a **merge request approval rule** requiring at least one approval to merge into
 `main`. The `dev`→`main` MR is the prod gate — that approval is the audit line.
 Leave `dev` unprotected (or allow the CI to push) so `deploy-dev` can commit the
 dev tag bump.
+
+> **Critical for this model:** turn **OFF** *Settings → Merge requests →
+> "Enable 'Delete source branch' option by default"*. The `dev` branch is
+> long-lived — it must survive every promotion merge. GitLab otherwise defaults
+> to deleting the source branch, which would destroy `dev` on the first
+> promotion. (`install.sh` sets `remove_source_branch_after_merge=false` for you.)
 
 ### A5 · Create the read-only deploy token for ArgoCD
 
@@ -330,12 +337,12 @@ Watch: `build-image` → JFrog, `deploy-dev` bumps `overlays/dev` on the `dev`
 branch → ArgoCD (tracking `dev`) auto-syncs →
 `https://sample-app-sample-app-dev.${APPS_DOMAIN}` shows the new commit SHA.
 
-**2 — Promotion to prod:** open an **MR `dev`→`main`**, approve, merge. The
-`promote-prod` job (ref=main) copies dev's image tag into `overlays/prod` —
-no rebuild. Then sync `sample-app-prod` in the ArgoCD UI (or `oc patch
-application sample-app-prod -n openshift-gitops --type=merge
--p '{"operation":{"sync":{"revision":"main"}}}'`). Note `build-image` does
-**not** run on `main` — prod gets the exact image dev ran.
+**2 — Promotion to prod:** open an **MR `dev`→`main`**, approve, merge —
+**leave "Delete source branch" unchecked** so `dev` survives. The `promote-prod`
+job (ref=main) copies dev's image tag into `overlays/prod` — no rebuild. Then
+sync `sample-app-prod` in the ArgoCD UI (or `oc patch application sample-app-prod
+-n openshift-gitops --type=merge -p '{"operation":{"sync":{"revision":"main"}}}'`).
+Note `build-image` does **not** run on `main` — prod gets the exact image dev ran.
 
 **3 — Rollback:** `git revert` the promotion MR on `main`, sync prod. Recovery
 uses the same path as delivery.

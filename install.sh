@@ -237,13 +237,16 @@ APP_PID="$(create_or_get_project "$APP_PROJECT")"
 [[ -n "$APP_PID" ]] || die "failed to create/find ${APP_PROJECT} project"
 ok "project ${APP_PROJECT} (id ${APP_PID})"
 
-# Allow CI_JOB_TOKEN to push to this project's git repo. Default is FALSE for
-# security; without this, update-manifest's `git push origin HEAD:main` returns
-# "You are not allowed to push code to this project" (HTTP 403). Requires JSON
-# body with a PUT (POST/form-encoded doesn't update this field on our GitLab).
+# Project settings (PUT with a JSON body — form-encoded doesn't update these):
+#   ci_push_repository_for_job_token_allowed: let CI_JOB_TOKEN push. Default is
+#     FALSE; without it the deploy-dev / promote-prod tag-bump `git push` returns
+#     HTTP 403 "You are not allowed to push code to this project".
+#   remove_source_branch_after_merge: FALSE. In the environment-branch model the
+#     `dev` branch is LONG-LIVED — it must survive every dev->main merge. GitLab
+#     defaults to deleting the source branch on merge, which would destroy `dev`.
 curl -sk -X PUT "${GITLAB_URL}/api/v4/projects/${APP_PID}" \
   -H "PRIVATE-TOKEN: ${GITLAB_PAT}" -H "Content-Type: application/json" \
-  -d '{"ci_push_repository_for_job_token_allowed":true}' >/dev/null 2>&1 || true
+  -d '{"ci_push_repository_for_job_token_allowed":true,"remove_source_branch_after_merge":false}' >/dev/null 2>&1 || true
 
 # Unprotect main so the initial seed can force-push
 gl_api --request DELETE "${GITLAB_URL}/api/v4/projects/${APP_PID}/protected_branches/main" >/dev/null 2>&1 || true

@@ -86,7 +86,8 @@ Promote dev → prod — done through an MR (the governance gate):
 
 ```
 # In the GitLab UI: Merge requests → New → source `dev`, target `main`
-# → get it approved → Merge.
+# → get it approved → Merge (leave "Delete source branch" UNCHECKED so the
+#   long-lived dev branch survives; install.sh sets this as the project default).
 #
 # The promote-prod job (ref=main) then copies dev's image tag into
 # gitops/overlays/prod — NO rebuild, the exact image dev validated.
