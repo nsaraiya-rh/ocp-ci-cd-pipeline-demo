@@ -42,7 +42,10 @@ the subset that applies to your environment:
 | ArgoCD Repository secret, Applications, webhook | **Create** |
 
 The application, its manifests, and the pipeline all live in **one GitLab
-project** (a monorepo). ArgoCD watches two paths inside it — one per environment.
+project** (a monorepo). **Branches are environments:** the `dev` branch drives
+dev, `main` drives prod, and ArgoCD tracks each branch. Committing to `dev`
+deploys dev automatically; a reviewed **MR `dev`→`main`** plus a Sync click
+deploys prod — and prod runs the exact image dev validated (no rebuild).
 
 ---
 
@@ -60,8 +63,8 @@ Full inventory, for review before you apply anything.
 | Label `argocd.argoproj.io/managed-by` | on both namespaces | Grants the `openshift-gitops` ArgoCD instance rights **in those two namespaces only** (the operator creates the RoleBindings) | Namespace-scoped |
 | `Secret` jfrog-pull (dockercfg) | dev + prod | Lets pods pull images from JFrog | Namespace-scoped |
 | `Secret` repo-sample-app (repository) | `openshift-gitops` | ArgoCD's **read-only** clone credential for the GitLab repo | Namespace-scoped |
-| `Application` sample-app-dev | `openshift-gitops` | Auto-syncs `gitops/overlays/dev` | — |
-| `Application` sample-app-prod | `openshift-gitops` | Manual-sync `gitops/overlays/prod` | — |
+| `Application` sample-app-dev | `openshift-gitops` | Auto-syncs `gitops/overlays/dev` from the **`dev` branch** | — |
+| `Application` sample-app-prod | `openshift-gitops` | Manual-sync `gitops/overlays/prod` from the **`main` branch** | — |
 | Key `webhook.gitlab.secret` in `argocd-secret` | `openshift-gitops` | Shared secret so GitLab can trigger a sync | Namespace-scoped |
 | `Deployment` / `Service` / `Route` sample-app | dev + prod | The running application (created by ArgoCD from Git) | Namespace-scoped |
 
@@ -74,11 +77,12 @@ namespaces you label. Nothing here grants standing privileges outside
 | Object | Purpose |
 |---|---|
 | One project (`<group>/sample-app`) | App source + gitops manifests + `.gitlab-ci.yml` |
+| A long-lived **`dev` branch** | Drives the dev environment; developers commit here |
 | 4 CI/CD variables | JFrog registry URL, repo, user, token (masked + protected) |
 | Project setting: *CI_JOB_TOKEN allowed to push* | Lets the pipeline commit the image-tag bump back to the repo |
-| Protected branch `main` + MR approval on `gitops/overlays/prod/**` | Makes prod deployments reviewed |
+| Protected `main` + MR approval rule | The `dev`→`main` MR is the prod gate; require an approval to merge |
 | Read-only deploy token | Consumed by ArgoCD's Repository secret above |
-| Project webhook → ArgoCD `/api/webhook` | Instant sync on gitops commits |
+| Project webhook → ArgoCD `/api/webhook` | Instant refresh on pushes to either branch |
 
 ### In JFrog
 
@@ -149,6 +153,9 @@ sed -i "s|__IMAGE_REPO__|${IMAGE_REPO}|g" \
 # (edit .gitlab-ci.yml, delete the line: GIT_SSL_NO_VERIFY: "true")
 
 git add -A && git commit -m "seed: sample-app monorepo" && git push
+
+# Create the long-lived dev branch (developers work here; drives dev env)
+git checkout -b dev && git push -u origin dev
 ```
 
 The seeded project layout:
@@ -156,10 +163,14 @@ The seeded project layout:
 ```
 app/                      application source + Dockerfile
 gitops/base/              Deployment, Service, Route
-gitops/overlays/dev/      auto-synced by ArgoCD
-gitops/overlays/prod/     manual-sync, MR-gated
-.gitlab-ci.yml            build -> JFrog, then bump gitops/overlays/dev tag
+gitops/overlays/dev/      bumped on the `dev` branch; ArgoCD auto-syncs
+gitops/overlays/prod/     bumped on `main` (promote); manual-sync, 3 replicas
+.gitlab-ci.yml            dev: build -> JFrog -> bump overlays/dev
+                          main (on merge): promote dev's tag into overlays/prod
 ```
+
+**Branches are environments:** `dev` → dev, `main` → prod. Developers commit to
+`dev`; promotion is an MR `dev`→`main`.
 
 ### A2 · Set the four CI/CD variables
 
@@ -180,10 +191,12 @@ with `HTTP 403 — You are not allowed to push code`.
 
 ### A4 · Protect branches
 
-Project → **Settings → Repository → Protected branches**: protect `main`.
-Add a **merge request approval rule** requiring at least one approval for
-changes to `gitops/overlays/prod/**`. This is what makes prod deployments
-reviewed — the audit line.
+Project → **Settings → Repository → Protected branches**: protect `main`
+(allow the CI/bot to push, so `promote-prod` can commit the prod tag). Then add
+a **merge request approval rule** requiring at least one approval to merge into
+`main`. The `dev`→`main` MR is the prod gate — that approval is the audit line.
+Leave `dev` unprotected (or allow the CI to push) so `deploy-dev` can commit the
+dev tag bump.
 
 ### A5 · Create the read-only deploy token for ArgoCD
 
@@ -279,8 +292,10 @@ oc apply -f <reference-repo>/deploy/argocd/sample-app-dev.yaml
 oc apply -f <reference-repo>/deploy/argocd/sample-app-prod.yaml
 ```
 
-- `sample-app-dev` — `syncPolicy.automated` (prune + selfHeal). Auto-deploys.
-- `sample-app-prod` — no `automated` block. Deploys only when a human syncs it.
+- `sample-app-dev` — tracks the **`dev` branch**, `syncPolicy.automated`
+  (prune + selfHeal). Auto-deploys.
+- `sample-app-prod` — tracks the **`main` branch**, no `automated` block.
+  Deploys only when a human syncs it.
 
 ### B6 · Wire the GitLab → ArgoCD webhook (instant sync)
 
@@ -308,20 +323,22 @@ Run these live; they are also the best demo scenarios.
 
 **1 — Full flow (dev):**
 ```bash
-# In the project working copy: edit app/app.py, then
-git commit -am "test: change message" && git push
+# On the dev branch: edit app/app.py, then
+git commit -am "test: change message" && git push origin dev
 ```
-Watch: GitLab pipeline builds → pushes to JFrog → commits a tag bump into
-`gitops/overlays/dev` → ArgoCD auto-syncs →
+Watch: `build-image` → JFrog, `deploy-dev` bumps `overlays/dev` on the `dev`
+branch → ArgoCD (tracking `dev`) auto-syncs →
 `https://sample-app-sample-app-dev.${APPS_DOMAIN}` shows the new commit SHA.
 
-**2 — Promotion to prod:** open an MR copying the current dev `newTag` into
-`gitops/overlays/prod/kustomization.yaml`; approve; merge; then sync
-`sample-app-prod` in the ArgoCD UI (or `oc patch application sample-app-prod
--n openshift-gitops --type=merge -p '{"operation":{"sync":{"revision":"main"}}}'`).
+**2 — Promotion to prod:** open an **MR `dev`→`main`**, approve, merge. The
+`promote-prod` job (ref=main) copies dev's image tag into `overlays/prod` —
+no rebuild. Then sync `sample-app-prod` in the ArgoCD UI (or `oc patch
+application sample-app-prod -n openshift-gitops --type=merge
+-p '{"operation":{"sync":{"revision":"main"}}}'`). Note `build-image` does
+**not** run on `main` — prod gets the exact image dev ran.
 
-**3 — Rollback:** `git revert` the promotion MR, merge, sync. Recovery uses the
-same path as delivery.
+**3 — Rollback:** `git revert` the promotion MR on `main`, sync prod. Recovery
+uses the same path as delivery.
 
 **4 — Self-heal:** `oc scale deploy/sample-app -n sample-app-dev --replicas=5`
 and watch ArgoCD revert it.

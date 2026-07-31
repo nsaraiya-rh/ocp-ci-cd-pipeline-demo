@@ -71,16 +71,22 @@ tls:
 argocd:
   namespace:      "openshift-gitops"
 
-  # Both Applications target the SAME monorepo, different paths inside it.
+  # Environment-branch model: both Applications point at the SAME monorepo, but
+  # track different BRANCHES (and their matching overlay path).
   applications:
     - name:       "sample-app-dev"
+      branch:     "dev"                    # targetRevision
       path:       "gitops/overlays/dev"
       namespace:  "sample-app-dev"
-      auto_sync:  true
+      auto_sync:  true                     # dev deploys automatically
     - name:       "sample-app-prod"
+      branch:     "main"                   # targetRevision
       path:       "gitops/overlays/prod"
       namespace:  "sample-app-prod"
-      auto_sync:  false          # MR-gated in real prod
+      auto_sync:  false                    # manual sync; MR dev->main is the gate
+
+# Flow: commit to `dev` -> build + deploy dev.  MR `dev`->`main`, merge ->
+# promote-prod copies dev's image tag to overlays/prod on main -> human Syncs prod.
 
 
 workloads:

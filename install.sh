@@ -276,6 +276,16 @@ seed_project() {
 
 seed_project "$APP_PID" "${REPO_DIR}/templates/sample-app" "$APP_PROJECT"
 
+# Environment-branch model: create the long-lived `dev` branch from main.
+# Developers commit to `dev` (drives the dev environment); an MR dev->main
+# promotes to prod. ArgoCD's dev Application tracks this branch.
+if [[ "$(gl_api "${GITLAB_URL}/api/v4/projects/${APP_PID}/repository/branches/dev" | grep -c '"name"')" == "0" ]]; then
+  gl_api --request POST "${GITLAB_URL}/api/v4/projects/${APP_PID}/repository/branches?branch=dev&ref=main" >/dev/null
+  ok "created dev branch (drives the dev environment)"
+else
+  ok "dev branch already exists"
+fi
+
 # CI variables — just the JFrog set. No cross-project token, no gitops URL.
 set_var() {                                  # $1 project id  $2 key  $3 value
   local pid="$1" k="$2" v="$3"
@@ -406,19 +416,21 @@ cat <<EOF
             root / ${GITLAB_ROOT_PW}
 
   Project   ${GITLAB_URL}/root/${APP_PROJECT}   (monorepo: app/ + gitops/ + .gitlab-ci.yml)
+            branch dev  -> dev environment    |    branch main -> prod environment
 
   Registry  ${JFROG_URL}/${JFROG_REPO}
 
-  Apps      https://sample-app-${DEV_NS}.${APPS_DOMAIN}    (dev, auto-sync)
-            https://sample-app-${PROD_NS}.${APPS_DOMAIN}   (prod, manual sync)
+  Apps      https://sample-app-${DEV_NS}.${APPS_DOMAIN}    (dev  · tracks 'dev' branch · auto-sync)
+            https://sample-app-${PROD_NS}.${APPS_DOMAIN}   (prod · tracks 'main' branch · manual sync)
 
   Credentials saved to: ${OUT_DIR}/credentials.txt
 
   Next:
-    1. Edit app/app.py in GitLab (${GITLAB_URL}/root/${APP_PROJECT})
-       commit + push to main. CI builds → pushes to JFrog → bumps
-       gitops/overlays/dev/kustomization.yaml → ArgoCD deploys dev.
-    2. Promote dev -> prod: open MR in the same project that copies the
-       current dev newTag into gitops/overlays/prod/kustomization.yaml,
-       review, merge. Then sync the sample-app-prod Application in ArgoCD.
+    1. On the 'dev' branch, edit app/app.py, commit + push.
+       CI builds → pushes to JFrog → bumps overlays/dev on 'dev' →
+       ArgoCD auto-deploys the dev environment.
+    2. Promote to prod: open an MR 'dev' -> 'main', get it approved, merge.
+       The promote-prod job copies dev's image tag into overlays/prod on main.
+    3. Deploy prod: open the sample-app-prod Application in ArgoCD and click
+       Sync (prod is manual-sync by design).
 EOF

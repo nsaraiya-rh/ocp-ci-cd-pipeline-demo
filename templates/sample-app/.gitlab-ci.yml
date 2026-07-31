@@ -1,41 +1,47 @@
-# CI/CD pipeline for sample-app (MONOREPO — app source + gitops in same project).
+# CI/CD pipeline — environment-branch model (monorepo).
 #
-#   build-image      -> buildah builds app/ and pushes to JFrog Artifactory,
-#                       tagged with the git commit short SHA.
-#   update-manifest  -> bumps gitops/overlays/dev/kustomization.yaml newTag and
-#                       pushes the commit back to THIS repo (main). ArgoCD then
-#                       auto-syncs sample-app-dev.
+#   Branch `dev`  drives the DEV environment.
+#   Branch `main` drives the PROD environment.
 #
-# Promotion to prod = a separate MR in THIS repo that changes
-# gitops/overlays/prod/kustomization.yaml newTag. NOT automated here.
+#   On a commit to `dev` (app/ changed):
+#     build-image  -> buildah builds app/, pushes to JFrog tagged <commit sha>
+#     deploy-dev   -> bumps gitops/overlays/dev newTag on the dev branch;
+#                     ArgoCD (tracking `dev`) auto-syncs the dev environment.
 #
-# CI/CD variables required (Settings > CI/CD > Variables — set by install.sh):
-#   JFROG_URL   e.g. company.jfrog.io      (host only, no protocol)
-#   JFROG_REPO  e.g. docker-local          (Docker repo name in Artifactory)
+#   On merge of an MR `dev` -> `main`:
+#     promote-prod -> copies the current dev image tag into
+#                     gitops/overlays/prod on main. ArgoCD (tracking `main`)
+#                     then shows prod OutOfSync; a human clicks Sync to deploy.
+#                     NB: this promotes the EXACT image dev ran — no rebuild.
+#
+# CI/CD variables (Settings > CI/CD > Variables — set by install.sh):
+#   JFROG_URL   host only, no protocol
+#   JFROG_REPO  Docker repo name in Artifactory
 #   JFROG_USER  JFrog identity
 #   JFROG_TOKEN JFrog access token (masked)
 #
-# Push-back to the gitops overlay uses CI_JOB_TOKEN — no long-lived credential
-# to rotate. Requires "CI_JOB_TOKEN allowed to push" (default true on new
-# projects in GitLab 16+; install.sh sets it explicitly).
+# Push-back to gitops overlays uses the built-in CI_JOB_TOKEN — no long-lived
+# credential. Requires the project's "CI_JOB_TOKEN allowed to push" setting
+# (install.sh enables it).
 
 stages:
   - build
-  - update-manifest
+  - deploy-dev
+  - promote-prod
 
 variables:
-  # In-cluster GitLab uses a self-signed router cert; the built-in get_sources
-  # step (git clone) needs this to succeed. Remove in customer envs with real TLS.
+  # In-cluster GitLab uses a self-signed router cert; the built-in git clone
+  # (get_sources) needs this. Remove in customer envs with real TLS.
   GIT_SSL_NO_VERIFY: "true"
   IMAGE: "${JFROG_URL}/${JFROG_REPO}/sample-app"
 
 workflow:
   rules:
-    # Only build on main, only when app code (or the pipeline file) changes,
-    # skip commits marked [skip ci] — the update-manifest commit itself is
-    # marked [skip ci] AND only touches gitops/, so it cannot re-trigger.
-    - if: '$CI_COMMIT_BRANCH == "main" && $CI_COMMIT_MESSAGE !~ /\[skip ci\]/'
-      changes: [ 'app/**', '.gitlab-ci.yml' ]
+    # Our own gitops tag-bump commits are marked [skip ci] — never loop.
+    - if: '$CI_COMMIT_MESSAGE =~ /\[skip ci\]/'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "dev"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
 
 build-image:
   stage: build
@@ -43,6 +49,9 @@ build-image:
   variables:
     STORAGE_DRIVER: vfs
     BUILDAH_FORMAT: docker
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "dev"'
+      changes: [ 'app/**', '.gitlab-ci.yml' ]
   script:
     - 'cd app'
     - 'echo "Building ${IMAGE}:${CI_COMMIT_SHORT_SHA}"'
@@ -50,9 +59,12 @@ build-image:
     - 'buildah login -u "${JFROG_USER}" -p "${JFROG_TOKEN}" "${JFROG_URL}"'
     - 'buildah push "${IMAGE}:${CI_COMMIT_SHORT_SHA}"'
 
-update-manifest:
-  stage: update-manifest
+deploy-dev:
+  stage: deploy-dev
   image: registry.access.redhat.com/ubi9/ubi:latest
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "dev"'
+      changes: [ 'app/**', '.gitlab-ci.yml' ]
   script:
     - 'dnf install -y git >/dev/null'
     - 'sed -i -E "s|(newTag:)[[:space:]]*\"[^\"]*\"|\1 \"${CI_COMMIT_SHORT_SHA}\"|" gitops/overlays/dev/kustomization.yaml'
@@ -60,6 +72,26 @@ update-manifest:
     - 'git config user.name "GitLab CI"'
     - 'git remote set-url origin "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"'
     - 'git add gitops/overlays/dev/kustomization.yaml'
-    - 'git diff --cached --quiet && echo "no change" && exit 0 || true'
-    - 'git commit -m "dev: bump sample-app to ${CI_COMMIT_SHORT_SHA} [skip ci]"'
+    - 'git diff --cached --quiet && echo "dev already at ${CI_COMMIT_SHORT_SHA}" && exit 0 || true'
+    - 'git commit -m "dev: deploy ${CI_COMMIT_SHORT_SHA} [skip ci]"'
+    - 'git push origin HEAD:dev'
+
+promote-prod:
+  stage: promote-prod
+  image: registry.access.redhat.com/ubi9/ubi:latest
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  script:
+    - 'dnf install -y git >/dev/null'
+    # The merge brought dev's overlays/dev (with its image tag) onto main.
+    # Promote that exact tag into overlays/prod — no rebuild.
+    - 'DEV_TAG=$(grep -E "^[[:space:]]*newTag:" gitops/overlays/dev/kustomization.yaml | tail -1 | awk "{print \$2}" | tr -d "\"")'
+    - 'echo "Promoting dev tag to prod: ${DEV_TAG}"'
+    - 'sed -i -E "s|(newTag:)[[:space:]]*\"[^\"]*\"|\1 \"${DEV_TAG}\"|" gitops/overlays/prod/kustomization.yaml'
+    - 'git config user.email "ci@gitlab.demo"'
+    - 'git config user.name "GitLab CI"'
+    - 'git remote set-url origin "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"'
+    - 'git add gitops/overlays/prod/kustomization.yaml'
+    - 'git diff --cached --quiet && echo "prod already at ${DEV_TAG}" && exit 0 || true'
+    - 'git commit -m "prod: promote ${DEV_TAG} [skip ci]"'
     - 'git push origin HEAD:main'
