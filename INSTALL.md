@@ -109,7 +109,7 @@ oc patch application sample-app-prod -n openshift-gitops --type=merge \
 | `helm ... failed pre-install: timed out` | `gitlab-anyuid` SCC isn't bound. Check `oc get scc gitlab-anyuid`. Then `helm uninstall gitlab -n gitlab-system` + re-run. |
 | ArgoCD repo error `x509: certificate is valid for *.apps.<other>...` | Stale cert in `.install-output/certs/`. Delete the dir and re-run — install.sh regenerates for the current apps domain. |
 | CI's `update-manifest` fails on `git push` with 403 | `CI_JOB_TOKEN` isn't allowed to push. In GitLab UI: Project → Settings → CI/CD → Job token permissions → allow the current project. |
-| No build after committing | `build-image`/`deploy-dev` run only on the **`dev`** branch with an `app/**` change. A commit on a feature branch, on `main`, with `[skip ci]`, or touching only `gitops/**` will not build. Merge to `dev` (or commit there) to build; merge to `main` runs only `promote-prod`. |
+| No build after committing | `build-image`/`deploy-dev` run on **any branch except `main`** with an `app/**` change. A commit on `main`, one with `[skip ci]`, or one touching only `gitops/**` will not build. `main` runs only `promote-prod`. |
 | Dev pods `ImagePullBackOff` right after install | Expected briefly — no image built yet. Push a commit; first pipeline builds + tags + syncs dev. |
 | GitLab webservice never ready | Slow cluster. `install.sh` waits up to 45 min. Check `oc get pods -n gitlab-system`; usually PVC/migrations. |
 | Running on OpenShift 4.12 | Older OpenShift GitOps operator (v1.8/1.9) — should just work; older `restricted` SCC instead of `restricted-v2`. Custom `gitlab-anyuid` SCC unchanged. If chart 9.11.8 rejects K8s 1.25, try chart 8.x. |

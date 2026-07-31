@@ -13,28 +13,30 @@ adapt for their own environment.
 ## The pattern
 
 Monorepo — **one GitLab project** holds application source, CI pipeline, and
-deployment manifests. **Branches are environments**: the `dev` branch drives the
-dev environment, `main` drives prod. ArgoCD tracks each branch.
+deployment manifests. **Any branch deploys to dev; `main` promotes to prod.** Push any branch (any
+name) and it builds + deploys to the dev environment; merging to `main` promotes
+the current dev image to prod. ArgoCD tracks `dev` and `main`.
 
 ```
-Developer ── commit to `dev` branch ──►  GitLab (sample-app monorepo)
+Developer ── push ANY branch ──►  GitLab (sample-app monorepo)
                             ├── app/                    source, Dockerfile
                             ├── gitops/base/            shared manifests
-                            ├── gitops/overlays/dev/    ← bumped on the dev branch
-                            ├── gitops/overlays/prod/   ← bumped on main (promote)
+                            ├── gitops/overlays/dev/    ← bumped on the `dev` branch
+                            ├── gitops/overlays/prod/   ← bumped on `main` (promote)
                             └── .gitlab-ci.yml
                             │
-   ┌────────────────────────┴─ on commit to `dev` ─────────────────────────┐
+   ┌──────────── on push to ANY branch except main ────────────────────────┐
    │ build-image  → buildah → JFrog Artifactory  :<commit sha>              │
-   │ deploy-dev   → bump overlays/dev on `dev` branch                       │
+   │ deploy-dev   → write that tag into overlays/dev on the `dev` branch    │
    └────────────────────────────────┬──────────────────────────────────────┘
                                      ▼  ArgoCD (tracks `dev`) auto-syncs
-                              OpenShift — sample-app-dev
+                              OpenShift — sample-app-dev   (latest push wins)
 
-   ── open MR `dev` → `main`, review, merge ──►
+   ── open MR (any branch) → `main`, review, merge ──►
 
    ┌──────────────── on merge to `main` ────────────────────────────────────┐
-   │ promote-prod → copy dev's image tag into overlays/prod  (NO rebuild)    │
+   │ promote-prod → copy the CURRENT dev image tag into overlays/prod        │
+   │                (NO rebuild — the exact image dev ran)                   │
    └────────────────────────────────┬──────────────────────────────────────┘
                                      ▼  ArgoCD (tracks `main`) → OutOfSync
                               a human clicks Sync
@@ -42,10 +44,10 @@ Developer ── commit to `dev` branch ──►  GitLab (sample-app monorepo)
                               OpenShift — sample-app-prod
 ```
 
-**Why branches as environments:** dev deploys automatically from the `dev`
-branch, while reaching prod requires a reviewed **MR `dev`→`main`** *and* a
-deliberate Sync click — two gates. Prod always runs the **exact image** dev
-validated; `promote-prod` copies the tag, it never rebuilds.
+**Two gates to prod:** any branch deploys to dev automatically, but reaching
+prod requires a reviewed **MR → `main`** *and* a deliberate Sync click. Prod
+always runs the **exact image** validated in dev; `promote-prod` copies the tag,
+it never rebuilds. Note dev is a **shared "latest push wins"** environment.
 
 ## Components deployed by `install.sh`
 
