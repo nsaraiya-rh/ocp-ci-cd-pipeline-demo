@@ -17,11 +17,12 @@ teams can review it before anything is applied.
 2. [Exactly what gets created](#2--exactly-what-gets-created)
 3. [Prerequisites you provide](#3--prerequisites-you-provide)
 4. [Set your variables](#4--set-your-variables)
-5. [Part A — GitLab setup](#5--part-a--gitlab-setup)
-6. [Part B — OpenShift setup](#6--part-b--openshift-setup)
-7. [Part C — Verify end to end](#7--part-c--verify-end-to-end)
-8. [Security notes](#8--security-notes)
-9. [Uninstall / rollback](#9--uninstall--rollback)
+5. [Part A — Foundation: seed the repository](#5--part-a--foundation-seed-the-repository)
+6. [Part B — CD: OpenShift + Argo CD](#6--part-b--cd-openshift--argo-cd)
+7. [Part C — CI: the GitLab pipeline](#7--part-c--ci-the-gitlab-pipeline)
+8. [Part D — Verify end to end](#8--part-d--verify-end-to-end)
+9. [Security notes](#9--security-notes)
+10. [Uninstall / rollback](#10--uninstall--rollback)
 
 ---
 
@@ -49,6 +50,25 @@ Prod runs the exact image dev validated (no rebuild). Mechanically, ArgoCD's dev
 Application tracks a long-lived `dev` branch, and CI writes each build's image
 tag into that branch's overlay — so whatever branch you push shows up in dev
 (a shared "latest push wins" environment).
+
+### Order of operations — CD before CI
+
+This runbook is deliberately ordered **CD-first**, which is the more
+GitOps-idiomatic sequence: you stand up the *destination and the reconciler*
+before the thing that feeds them.
+
+1. **Part A — seed the repository.** Both CI and CD depend on the GitLab project
+   existing and seeded, so this shared foundation comes first.
+2. **Part B — CD (ArgoCD).** ArgoCD's only job is to reconcile the cluster to
+   Git; it does **not** depend on CI existing. After this step the dev pods sit
+   in `ImagePullBackOff` — *expected*, because no image has been built yet. It
+   visibly proves "ArgoCD is watching and waiting for an image."
+3. **Part C — CI (the pipeline).** CI's only job is to build an image and write
+   its tag into the file ArgoCD already watches. The first push turns dev green.
+
+Setting CD up first isolates failure domains cleanly: a problem is either
+**CD** (repo access / RBAC / sync) or **CI** (build / push / token), never a
+tangle of both.
 
 ---
 
@@ -81,11 +101,11 @@ namespaces you label. Nothing here grants standing privileges outside
 |---|---|
 | One project (`<group>/sample-app`) | App source + gitops manifests + `.gitlab-ci.yml` |
 | A long-lived **`dev` branch** | Drives the dev environment; developers commit here. Must survive every merge — see the "keep source branch" note below. |
-| Project setting: *remove source branch after merge = OFF* | Keeps the permanent `dev` branch from being deleted when a promotion MR merges |
+| Read-only deploy token | Consumed by ArgoCD's Repository secret above |
 | 4 CI/CD variables | JFrog registry URL, repo, user, token (masked + protected) |
 | Project setting: *CI_JOB_TOKEN allowed to push* | Lets the pipeline commit the image-tag bump back to the repo |
-| Protected `main` + MR approval rule | The `dev`→`main` MR is the prod gate; require an approval to merge |
-| Read-only deploy token | Consumed by ArgoCD's Repository secret above |
+| Project setting: *remove source branch after merge = OFF* | Keeps the permanent `dev` branch from being deleted when a promotion MR merges |
+| Protected `main` + MR approval rule | The MR into `main` is the prod gate; require an approval to merge |
 | Project webhook → ArgoCD `/api/webhook` | Instant refresh on pushes to either branch |
 
 ### In JFrog
@@ -105,7 +125,7 @@ Before starting, have these ready (owning team in brackets):
    a **read-only** technical user (cluster pull).
 4. **[Platform]** OpenShift cluster-admin once (operator install) + namespace-admin ongoing.
 5. **[Network]** Egress: cluster → GitLab & JFrog; GitLab → cluster (webhook).
-6. **[Security + DevOps]** A decision on the build method — see [Section 8](#8--security-notes).
+6. **[Security + DevOps]** A decision on the build method — see [Section 9](#9--security-notes).
 
 Tooling on your workstation: `oc`, `git`. (`helm` only if you also install the
 runner in-cluster, which most customers do not.)
@@ -124,7 +144,7 @@ export APPS_DOMAIN="apps.ocp.company.com"          # oc get ingresses.config/clu
 export GITLAB_HOST="gitlab.company.com"            # no scheme
 export GITLAB_GROUP="platform-demos"
 export GITLAB_PROJECT="sample-app"                 # <group>/<project> is the monorepo
-export GITLAB_DEPLOY_TOKEN="<read-only deploy token value>"   # created in Part A, step 5
+export GITLAB_DEPLOY_TOKEN="<read-only deploy token value>"   # created in Part A, step A2
 export GITLAB_DEPLOY_USER="argocd-reader"
 
 # --- JFrog ---
@@ -137,9 +157,10 @@ export IMAGE_REPO="${JFROG_URL}/${JFROG_REPO}/sample-app"
 
 ---
 
-## 5 · Part A — GitLab setup
+## 5 · Part A — Foundation: seed the repository
 
-**Goal:** a seeded project that builds and pushes to JFrog on the first commit.
+**Goal:** a seeded project and the read-only token ArgoCD needs — the shared
+foundation both CD and CI build on. (No CI configuration yet; that's Part C.)
 
 ### A1 · Seed the project from the reference templates
 
@@ -175,62 +196,24 @@ gitops/overlays/prod/     bumped on `main` (promote); manual-sync, 3 replicas
 ```
 
 **How branches map:** push **any branch** → dev; **MR into `main`** → prod. `dev`
-is the ArgoCD-tracked branch CI writes to; developers commit to
-`dev`; promotion is an MR `dev`→`main`.
+is the ArgoCD-tracked branch CI writes to; developers commit to any branch;
+promotion is an MR into `main`.
 
-### A2 · Set the four CI/CD variables
-
-Project → **Settings → CI/CD → Variables** (mark JFROG_TOKEN masked + protected):
-
-| Key | Value |
-|---|---|
-| `JFROG_URL` | `${JFROG_URL}` |
-| `JFROG_REPO` | `${JFROG_REPO}` |
-| `JFROG_USER` | (your CI push user) |
-| `JFROG_TOKEN` | (your CI push token) |
-
-### A3 · Allow CI_JOB_TOKEN to push
-
-Project → **Settings → CI/CD → Job token permissions** → allow this project to
-push to its own repository. Without this, the pipeline's tag-bump commit fails
-with `HTTP 403 — You are not allowed to push code`.
-
-### A4 · Protect branches + keep `dev` permanent
-
-Project → **Settings → Repository → Protected branches**: protect `main`
-(allow the CI/bot to push, so `promote-prod` can commit the prod tag). Then add
-a **merge request approval rule** requiring at least one approval to merge into
-`main`. The `dev`→`main` MR is the prod gate — that approval is the audit line.
-Leave `dev` unprotected (or allow the CI to push) so `deploy-dev` can commit the
-dev tag bump.
-
-> **Critical for this model:** turn **OFF** *Settings → Merge requests →
-> "Enable 'Delete source branch' option by default"*. The `dev` branch is
-> long-lived — it must survive every promotion merge. GitLab otherwise defaults
-> to deleting the source branch, which would destroy `dev` on the first
-> promotion. (`install.sh` sets `remove_source_branch_after_merge=false` for you.)
-
-### A5 · Create the read-only deploy token for ArgoCD
+### A2 · Create the read-only deploy token for ArgoCD
 
 Project → **Settings → Repository → Deploy tokens**: name `argocd-reader`,
 scope `read_repository`. Copy the token value into `GITLAB_DEPLOY_TOKEN`.
 
-### A6 · Confirm the runner and JFrog
-
-- Your shared runner must be able to pull `quay.io/buildah/stable` and reach JFrog.
-- Dry-run from a jump host to prove creds before CI depends on them:
-  ```bash
-  docker login ${JFROG_URL} -u <ci-push-user> -p <ci-push-token>
-  docker pull registry.access.redhat.com/ubi9/ubi:latest
-  docker tag  ubi9/ubi:latest ${IMAGE_REPO}:probe
-  docker push ${IMAGE_REPO}:probe
-  ```
+> This is all CD needs from GitLab — a read-only clone credential. Everything
+> else GitLab-side (JFrog vars, push permission, branch protection) is CI
+> configuration and comes in Part C.
 
 ---
 
-## 6 · Part B — OpenShift setup
+## 6 · Part B — CD: OpenShift + Argo CD
 
-**Goal:** ArgoCD watching the repo, both Applications registered.
+**Goal:** ArgoCD watching the repo, both Applications registered and syncing.
+This part stands alone — it does not depend on CI existing yet.
 
 ### B1 · Install the OpenShift GitOps operator
 
@@ -327,9 +310,64 @@ Then in GitLab → **Settings → Webhooks**: URL
 (Without the webhook, ArgoCD still deploys — just on its ~3-minute poll instead
 of instantly.)
 
+> **Expected now:** the dev pods will be in `ImagePullBackOff`. That is correct —
+> the overlay points at an image tag no build has produced yet. ArgoCD is
+> healthy and watching; the first CI run (Part C) writes a real tag and the pods
+> go green. This is a good moment to show the customer "the reconciler is live,
+> waiting for an image."
+
 ---
 
-## 7 · Part C — Verify end to end
+## 7 · Part C — CI: the GitLab pipeline
+
+**Goal:** the first push builds an image, pushes it to JFrog, bumps the dev tag,
+and ArgoCD (already running from Part B) turns dev green.
+
+### C1 · Set the four CI/CD variables
+
+Project → **Settings → CI/CD → Variables** (mark JFROG_TOKEN masked + protected):
+
+| Key | Value |
+|---|---|
+| `JFROG_URL` | `${JFROG_URL}` |
+| `JFROG_REPO` | `${JFROG_REPO}` |
+| `JFROG_USER` | (your CI push user) |
+| `JFROG_TOKEN` | (your CI push token) |
+
+### C2 · Allow CI_JOB_TOKEN to push
+
+Project → **Settings → CI/CD → Job token permissions** → allow this project to
+push to its own repository. Without this, the pipeline's tag-bump commit fails
+with `HTTP 403 — You are not allowed to push code`.
+
+### C3 · Protect branches + keep `dev` permanent
+
+Project → **Settings → Repository → Protected branches**: protect `main`
+(allow the CI/bot to push, so `promote-prod` can commit the prod tag). Then add
+a **merge request approval rule** requiring at least one approval to merge into
+`main`. That approval is the prod gate — the audit line. Leave `dev` writable by
+the CI so `deploy-dev` can commit the dev tag bump.
+
+> **Critical for this model:** turn **OFF** *Settings → Merge requests →
+> "Enable 'Delete source branch' option by default"*. The `dev` branch is
+> long-lived — it must survive every promotion merge. GitLab otherwise defaults
+> to deleting the source branch, which would destroy `dev` on the first
+> promotion. (`install.sh` sets `remove_source_branch_after_merge=false` for you.)
+
+### C4 · Confirm the runner and JFrog
+
+- Your shared runner must be able to pull `quay.io/buildah/stable` and reach JFrog.
+- Dry-run from a jump host to prove creds before CI depends on them:
+  ```bash
+  docker login ${JFROG_URL} -u <ci-push-user> -p <ci-push-token>
+  docker pull registry.access.redhat.com/ubi9/ubi:latest
+  docker tag  ubi9/ubi:latest ${IMAGE_REPO}:probe
+  docker push ${IMAGE_REPO}:probe
+  ```
+
+---
+
+## 8 · Part D — Verify end to end
 
 Run these live; they are also the best demo scenarios.
 
@@ -340,8 +378,9 @@ git checkout -b feature-demo && git commit -am "test: change message"
 git push -u origin feature-demo
 ```
 Watch: `build-image` → JFrog, `deploy-dev` writes the tag into `overlays/dev`
-on the `dev` branch → ArgoCD (tracking `dev`) auto-syncs →
-`https://sample-app-sample-app-dev.${APPS_DOMAIN}` shows the new commit SHA.
+on the `dev` branch → ArgoCD (tracking `dev`) auto-syncs → the dev pods leave
+`ImagePullBackOff` → `https://sample-app-sample-app-dev.${APPS_DOMAIN}` shows the
+new commit SHA.
 
 **2 — Promotion to prod:** open an **MR `feature-demo`→`main`**, approve, merge —
 **leave "Delete source branch" unchecked** so `dev` survives. The `promote-prod`
@@ -364,7 +403,7 @@ reaches the cluster.
 
 ---
 
-## 8 · Security notes
+## 9 · Security notes
 
 **Build execution.** The reference builds images with `buildah` under
 `privileged: true`. Your cluster policy may forbid this. Options, most to least
@@ -390,7 +429,7 @@ ArgoCD's repo access is a **read-only** deploy token.
 
 ---
 
-## 9 · Uninstall / rollback
+## 10 · Uninstall / rollback
 
 Everything this guide creates can be removed cleanly:
 
