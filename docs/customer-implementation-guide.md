@@ -42,10 +42,13 @@ the subset that applies to your environment:
 | ArgoCD Repository secret, Applications, webhook | **Create** |
 
 The application, its manifests, and the pipeline all live in **one GitLab
-project** (a monorepo). **Branches are environments:** the `dev` branch drives
-dev, `main` drives prod, and ArgoCD tracks each branch. Committing to `dev`
-deploys dev automatically; a reviewed **MR `dev`→`main`** plus a Sync click
-deploys prod — and prod runs the exact image dev validated (no rebuild).
+project** (a monorepo). **Any branch deploys to dev; `main` promotes to prod.**
+Pushing any branch (any name) builds the image and deploys it to the dev
+environment; a reviewed **MR into `main`** plus a Sync click promotes it to prod.
+Prod runs the exact image dev validated (no rebuild). Mechanically, ArgoCD's dev
+Application tracks a long-lived `dev` branch, and CI writes each build's image
+tag into that branch's overlay — so whatever branch you push shows up in dev
+(a shared "latest push wins" environment).
 
 ---
 
@@ -155,7 +158,8 @@ sed -i "s|__IMAGE_REPO__|${IMAGE_REPO}|g" \
 
 git add -A && git commit -m "seed: sample-app monorepo" && git push
 
-# Create the long-lived dev branch (developers work here; drives dev env)
+# Create the long-lived dev branch (ArgoCD tracks it; CI writes the dev image
+# tag here for whatever branch is pushed). Developers use ANY branch name.
 git checkout -b dev && git push -u origin dev
 ```
 
@@ -164,13 +168,14 @@ The seeded project layout:
 ```
 app/                      application source + Dockerfile
 gitops/base/              Deployment, Service, Route
-gitops/overlays/dev/      bumped on the `dev` branch; ArgoCD auto-syncs
+gitops/overlays/dev/      image tag written here (on the `dev` branch) by CI; ArgoCD auto-syncs
 gitops/overlays/prod/     bumped on `main` (promote); manual-sync, 3 replicas
-.gitlab-ci.yml            dev: build -> JFrog -> bump overlays/dev
-                          main (on merge): promote dev's tag into overlays/prod
+.gitlab-ci.yml            any branch: build -> JFrog -> write tag into overlays/dev on `dev`
+                          main (on merge): promote current dev tag into overlays/prod
 ```
 
-**Branches are environments:** `dev` → dev, `main` → prod. Developers commit to
+**How branches map:** push **any branch** → dev; **MR into `main`** → prod. `dev`
+is the ArgoCD-tracked branch CI writes to; developers commit to
 `dev`; promotion is an MR `dev`→`main`.
 
 ### A2 · Set the four CI/CD variables
@@ -330,14 +335,15 @@ Run these live; they are also the best demo scenarios.
 
 **1 — Full flow (dev):**
 ```bash
-# On the dev branch: edit app/app.py, then
-git commit -am "test: change message" && git push origin dev
+# On ANY branch (any name): edit app/app.py, then
+git checkout -b feature-demo && git commit -am "test: change message"
+git push -u origin feature-demo
 ```
-Watch: `build-image` → JFrog, `deploy-dev` bumps `overlays/dev` on the `dev`
-branch → ArgoCD (tracking `dev`) auto-syncs →
+Watch: `build-image` → JFrog, `deploy-dev` writes the tag into `overlays/dev`
+on the `dev` branch → ArgoCD (tracking `dev`) auto-syncs →
 `https://sample-app-sample-app-dev.${APPS_DOMAIN}` shows the new commit SHA.
 
-**2 — Promotion to prod:** open an **MR `dev`→`main`**, approve, merge —
+**2 — Promotion to prod:** open an **MR `feature-demo`→`main`**, approve, merge —
 **leave "Delete source branch" unchecked** so `dev` survives. The `promote-prod`
 job (ref=main) copies dev's image tag into `overlays/prod` — no rebuild. Then
 sync `sample-app-prod` in the ArgoCD UI (or `oc patch application sample-app-prod

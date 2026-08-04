@@ -83,9 +83,10 @@ argocd:
       branch:     "main"                   # targetRevision
       path:       "gitops/overlays/prod"
       namespace:  "sample-app-prod"
-      auto_sync:  false                    # manual sync; MR dev->main is the gate
+      auto_sync:  false                    # manual sync; MR into main is the gate
 
-# Flow: commit to `dev` -> build + deploy dev.  MR `dev`->`main`, merge ->
+# Flow: push ANY branch -> build + deploy dev (CI writes the tag into overlays/dev
+# on the `dev` branch, which ArgoCD dev tracks).  MR any-branch->`main`, merge ->
 # promote-prod copies dev's image tag to overlays/prod on main -> human Syncs prod.
 
 
