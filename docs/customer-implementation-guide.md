@@ -201,8 +201,20 @@ promotion is an MR into `main`.
 
 ### A2 · Create the read-only deploy token for ArgoCD
 
-Project → **Settings → Repository → Deploy tokens**: name `argocd-reader`,
-scope `read_repository`. Copy the token value into `GITLAB_DEPLOY_TOKEN`.
+Project → **Settings → Repository → Deploy tokens**. Fill in:
+
+- **Name:** `argocd-reader` (just a label).
+- **Username:** `argocd-reader` — set this explicitly so it matches
+  `GITLAB_DEPLOY_USER`. If you leave it blank, GitLab auto-generates a username
+  like `gitlab+deploy-token-42`, and you must then set `GITLAB_DEPLOY_USER` to
+  *that* generated value instead.
+- **Scopes:** `read_repository` only.
+
+`GITLAB_DEPLOY_USER` is the **deploy token's username** (not a person or GitLab
+account); `GITLAB_DEPLOY_TOKEN` is the generated token value. ArgoCD clones the
+repo over HTTPS using the two as basic auth (`username:token`) — a mismatch
+shows up as a 401 on the repo in the ArgoCD UI. Copy the token value into
+`GITLAB_DEPLOY_TOKEN`.
 
 > This is all CD needs from GitLab — a read-only clone credential. Everything
 > else GitLab-side (JFrog vars, push permission, branch protection) is CI
