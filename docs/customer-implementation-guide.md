@@ -124,11 +124,72 @@ Before starting, have these ready (owning team in brackets):
 3. **[JFrog admin]** A Docker repository, plus a **push** technical user (CI) and
    a **read-only** technical user (cluster pull).
 4. **[Platform]** OpenShift cluster-admin once (operator install) + namespace-admin ongoing.
-5. **[Network]** Egress: cluster → GitLab & JFrog; GitLab → cluster (webhook).
+5. **[Network]** The connectivity below — this is where most first-run failures
+   come from, so confirm it before seeding.
 6. **[Security + DevOps]** A decision on the build method — see [Section 9](#9--security-notes).
 
 Tooling on your workstation: `oc`, `git`. (`helm` only if you also install the
 runner in-cluster, which most customers do not.)
+
+### Network connectivity (hand this to the network team)
+
+Most first-run failures are a blocked port, not a config error. Four actors talk
+to each other: **GitLab**, the **Runner** (build jobs), the **OpenShift cluster**
+(ArgoCD + the nodes that pull images), and **JFrog**.
+
+| # | From | To | Port | Purpose | Required |
+|---|---|---|---|---|---|
+| 1 | Developer workstation | GitLab | 443 / 22 | Push code (HTTPS or SSH) | ✅ |
+| 2 | Runner | GitLab | 443 | Fetch jobs, clone source, **push the tag-bump back** (`CI_JOB_TOKEN`) | ✅ |
+| 3 | Runner | `quay.io`, `registry.access.redhat.com` | 443 | Pull `buildah/stable` (build) + `ubi9` (deploy jobs + Dockerfile base) | ✅ |
+| 4 | Runner | JFrog | 443 | `buildah login` + **push image** | ✅ |
+| 5 | Cluster (ArgoCD) | GitLab | 443 | Clone the repo (read-only deploy token) | ✅ |
+| 6 | Cluster nodes | JFrog | 443 | **Pull images** to run pods (`jfrog-pull` secret) | ✅ |
+| 7 | Cluster | `registry.redhat.io` / your mirror | 443 | Pull the GitOps operator + ArgoCD images (install only) | ✅ |
+| 8 | GitLab | ArgoCD route | 443 | Webhook → instant sync | ⚠️ optional |
+| 9 | Admin / developer | OpenShift API `:6443` + ArgoCD route `:443` | — | `oc` access + click **Sync** for prod | ✅ |
+
+Legs 1–7 and 9 are the must-haves to test the full flow. Leg 8 is a nicety —
+without it ArgoCD still deploys on its ~3-minute poll (leg 5).
+
+**Three things that decide the matrix — check these first:**
+
+1. **Where the Runner lives.** If you use GitLab **SaaS shared runners**, leg 4
+   (runner → JFrog) originates from the public internet — so a private,
+   internal-only JFrog is **unreachable** and you must use a **self-hosted
+   runner** (in your network or in the cluster). For an enterprise with private
+   Artifactory, self-hosted is almost always the right choice; then legs 2–4 are
+   all egress from your own network.
+2. **Is the ArgoCD route reachable from GitLab (leg 8)?** A public GitLab (e.g.
+   gitlab.com) can only call the webhook if the ArgoCD route is publicly
+   reachable. If it isn't, skip the webhook for the first test — the poll covers
+   you.
+3. **TLS / CA trust and proxy.** A public GitLab cert needs no custom CA (and you
+   can drop `GIT_SSL_NO_VERIFY`). If **JFrog** presents a private CA, that CA
+   must be trusted in **two** places: the **runner** (for `buildah login`) and
+   the **cluster nodes** (for image pull). Behind a corporate egress proxy, set
+   `HTTP(S)_PROXY` on the runner and configure the cluster-wide `Proxy` for
+   legs 5–7.
+
+**Preflight — prove each leg before wiring anything:**
+
+```bash
+# Leg 5 / 6 — from a cluster debug pod: cluster → GitLab and → JFrog
+oc run netcheck --rm -it --image=registry.access.redhat.com/ubi9/ubi -- bash -c '
+  curl -sSI https://<gitlab-host> | head -1
+  curl -sSI https://<jfrog-host>/artifactory/api/system/ping'
+
+# Leg 4 — runner → JFrog (run on the runner / a jump host in its network)
+docker login <jfrog-host> -u <ci-push-user> -p <ci-push-token>
+
+# Leg 3 — runner → base images
+curl -sSI https://quay.io https://registry.access.redhat.com | grep HTTP
+
+# Leg 9 — you → cluster API
+oc whoami --show-server
+```
+
+If all of those pass, the pipeline will run.
 
 ---
 
@@ -154,6 +215,12 @@ export JFROG_PULL_USER="svc-cluster-pull"
 export JFROG_PULL_TOKEN="<read-only jfrog token>"
 export IMAGE_REPO="${JFROG_URL}/${JFROG_REPO}/sample-app"
 ```
+
+> **Nested subgroups:** `GITLAB_GROUP` may be a full nested path, e.g.
+> `group/subgroup/applications`. Include every segment before the project name —
+> the repo URL is simply `${GITLAB_HOST}/${GITLAB_GROUP}/${GITLAB_PROJECT}.git`,
+> and GitLab's built-in `CI_PROJECT_PATH` resolves the nesting automatically, so
+> no pipeline edits are needed however deep the project sits.
 
 ---
 
