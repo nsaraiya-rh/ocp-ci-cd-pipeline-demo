@@ -321,6 +321,13 @@ done
 
 The label is what grants ArgoCD rights **in those namespaces only**.
 
+> **Do both namespaces.** The `managed-by` label (here) *and* the `jfrog-pull`
+> secret (next step) must exist in **both** `sample-app-dev` and
+> `sample-app-prod`. The `for` loops above handle both — but if you ever apply
+> them one namespace at a time, forgetting the second surfaces later as a
+> confusing failure: `forbidden: … cannot create resource …` on Sync (missing
+> label) or `ImagePullBackOff … Authentication is required` (missing secret).
+
 ### B3 · Create the JFrog pull secret in each namespace
 
 > Prefer your secrets manager (Vault / External Secrets Operator). The plain

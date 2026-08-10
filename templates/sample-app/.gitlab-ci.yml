@@ -16,6 +16,11 @@
 #   NB: `dev` is a shared "latest push wins" environment. Prod promotes whatever
 #   is currently deployed to dev.
 #
+#   This is the SHARED-DEV model used by the demo install.sh. For per-branch
+#   PREVIEW environments (real GitLab), use .gitlab-ci.preview.yml instead — it
+#   drops deploy-dev and promotes the tested image via the merge commit's 2nd
+#   parent. See docs/preview-environments.md.
+#
 # CI/CD variables (Settings > CI/CD > Variables — set by install.sh):
 #   JFROG_URL / JFROG_REPO / JFROG_USER / JFROG_TOKEN
 # Push-back to the gitops overlays uses the built-in CI_JOB_TOKEN.

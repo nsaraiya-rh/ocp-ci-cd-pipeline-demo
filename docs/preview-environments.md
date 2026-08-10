@@ -94,7 +94,11 @@ already uses to clone the repo, so nothing new for the network team.
 
 ## 3 · CI changes vs. the shared-dev model
 
-Two changes to `.gitlab-ci.yml`. There is **no `deploy-dev` job** in this
+The complete preview pipeline is shipped as
+[`templates/sample-app/.gitlab-ci.preview.yml`](../templates/sample-app/.gitlab-ci.preview.yml) —
+copy its contents into the project's `.gitlab-ci.yml`. (The default
+`.gitlab-ci.yml` is the shared-dev variant used by the demo `install.sh`.) The
+two jobs are shown below for reference. There is **no `deploy-dev` job** in this
 model — the ApplicationSet injects the image, so CI never writes a tag back for
 dev/preview.
 

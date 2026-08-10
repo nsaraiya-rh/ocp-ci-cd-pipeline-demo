@@ -1,0 +1,77 @@
+# CI/CD pipeline — PREVIEW-ENVIRONMENT model (for real GitLab, e.g. gitlab.com).
+#
+# Use this variant when you drive dev with the per-branch preview ApplicationSet
+# (deploy/argocd/sample-app-preview-appset.yaml) instead of a shared `dev` branch.
+# Copy its contents into the project's `.gitlab-ci.yml`. See
+# docs/preview-environments.md for the full model.
+#
+#   On a push to ANY branch except `main`:
+#     build-image  -> Kaniko builds app/ and pushes to JFrog tagged with BOTH the
+#                     full commit SHA and the short SHA. There is NO deploy job —
+#                     the preview ApplicationSet watches branches and deploys
+#                     :<full sha> into sample-app-dev as sample-app-<branch-slug>.
+#
+#   On merge of an MR into `main` (project merge method MUST be "Merge commit"):
+#     promote-prod -> reads the merge commit's 2nd parent (HEAD^2 = the tested
+#                     feature-branch tip) and writes that tag into overlays/prod
+#                     on main. ArgoCD (tracking `main`) shows prod OutOfSync; a
+#                     human clicks Sync. Promotes the EXACT tested image — no rebuild.
+#
+# Build method: Kaniko (unprivileged) — works on locked-down Kubernetes runners
+#   where privileged buildah is not allowed.
+#
+# Requirements:
+#   - CI/CD variables: JFROG_URL / JFROG_REPO / JFROG_USER / JFROG_TOKEN
+#   - Enable CI_JOB_TOKEN repo push (ci_push_repository_for_job_token_allowed=true)
+#   - Project merge method = "Merge commit" (Settings > Merge requests)
+#   - Runner egress to gcr.io (Kaniko image) or mirror it into JFrog
+#   - This assumes real TLS (no GIT_SSL_NO_VERIFY). Add it back only for a
+#     self-signed in-cluster GitLab.
+
+stages:
+  - build
+  - promote-prod
+
+variables:
+  IMAGE: "${JFROG_URL}/${JFROG_REPO}/sample-app"
+
+workflow:
+  rules:
+    - if: '$CI_COMMIT_MESSAGE =~ /\[skip ci\]/'   # our own gitops commits
+      when: never
+    - if: '$CI_COMMIT_BRANCH'                      # any branch
+
+build-image:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]                              # required so GitLab injects its shell
+  rules:
+    - if: '$CI_COMMIT_BRANCH != "main"'           # every push on any feature branch
+  script:
+    - 'echo "Building ${IMAGE} from ${CI_COMMIT_REF_NAME} @ ${CI_COMMIT_SHA}"'
+    - 'AUTH=$(printf "%s:%s" "${JFROG_USER}" "${JFROG_TOKEN}" | base64 | tr -d "\n")'
+    - 'mkdir -p /kaniko/.docker'
+    - 'printf "{\"auths\":{\"%s\":{\"auth\":\"%s\"}}}" "${JFROG_URL}" "${AUTH}" > /kaniko/.docker/config.json'
+    # Push BOTH tags: full SHA (used by the preview ApplicationSet) + short SHA.
+    - '/kaniko/executor --context "${CI_PROJECT_DIR}/app" --dockerfile "${CI_PROJECT_DIR}/app/Dockerfile" --destination "${IMAGE}:${CI_COMMIT_SHA}" --destination "${IMAGE}:${CI_COMMIT_SHORT_SHA}" --build-arg APP_VERSION="${CI_COMMIT_SHORT_SHA}"'
+
+promote-prod:
+  stage: promote-prod
+  image: registry.access.redhat.com/ubi9/ubi:latest
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  script:
+    - 'dnf install -y git >/dev/null'
+    # The tested image = the MR source-branch tip = the merge commit's 2nd parent.
+    - 'SRC_SHA=$(git rev-parse HEAD^2 2>/dev/null || echo "")'
+    - 'test -n "${SRC_SHA}" || { echo "No merge-commit 2nd parent. Set the project merge method to *Merge commit* (not squash / fast-forward) so prod can promote the tested image."; exit 1; }'
+    - 'echo "Promoting tested image ${SRC_SHA} to prod"'
+    - 'sed -i -E "s|(newTag:)[[:space:]]*\"[^\"]*\"|\1 \"${SRC_SHA}\"|" gitops/overlays/prod/kustomization.yaml'
+    - 'git config user.email "${GITLAB_USER_EMAIL}"'   # satisfies verified-committer push rule
+    - 'git config user.name  "${GITLAB_USER_NAME}"'
+    - 'git remote set-url origin "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"'
+    - 'git add gitops/overlays/prod/kustomization.yaml'
+    - 'git diff --cached --quiet && echo "prod already at ${SRC_SHA}" && exit 0 || true'
+    - 'git commit -m "prod: promote ${SRC_SHA} [skip ci]"'
+    - 'git push origin HEAD:main'
