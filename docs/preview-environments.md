@@ -184,15 +184,85 @@ The prod side is otherwise unchanged: `sample-app-prod` Application tracks
    delete branches manually. Previews are torn down when the branch is deleted,
    so leaving merged branches around leaves their previews running.
 
-**Re-sync timing:** the branch generator re-polls GitLab every
-`requeueAfterSeconds` (120s in the manifest); within that window it picks up new
-branches, new head commits, and deleted branches. Point a GitLab **push webhook**
-at the ApplicationSet controller's webhook endpoint to make it near-instant
-instead of waiting for the poll.
+**Re-sync timing:** by default there are two poll clocks — the branch generator
+(`requeueAfterSeconds`, 120s in the manifest) and ArgoCD's Application reconcile
+(180s). A commit therefore appears in its preview within ~2–3 min. To make it
+near-instant, wire the webhook in [Section 6](#6--instant-updates-with-a-webhook-optional).
+
+```bash
+# Check the two intervals:
+oc get applicationset sample-app-preview -n openshift-gitops \
+  -o jsonpath='{.spec.generators[0].scmProvider.requeueAfterSeconds}{"\n"}'      # → 120
+oc get cm argocd-cm -n openshift-gitops -o jsonpath='{.data.timeout\.reconciliation}{"\n"}'  # empty = 180s default
+```
 
 ---
 
-## 6 · When to graduate to namespace-per-branch
+## 6 · Instant updates with a webhook (optional)
+
+Polling is the fallback. A **single GitLab webhook** makes both the preview
+ApplicationSet and the prod Application react in seconds. Importantly, both the
+**Application** and **ApplicationSet** webhooks are handled by the **same**
+ArgoCD server endpoint — `/api/webhook` — so you configure just one webhook (the
+same one from Part B7 of the runbook).
+
+### 6.1 · Ensure the shared secret exists
+
+```bash
+# Should print a value; if empty, set it and restart argocd-server:
+oc get secret argocd-secret -n openshift-gitops \
+  -o jsonpath='{.data.webhook\.gitlab\.secret}' | base64 -d; echo
+
+# (only if empty)
+WEBHOOK_SECRET=$(openssl rand -hex 20)
+oc patch secret argocd-secret -n openshift-gitops --type merge \
+  -p "{\"stringData\":{\"webhook.gitlab.secret\":\"${WEBHOOK_SECRET}\"}}"
+oc rollout restart deploy/openshift-gitops-server -n openshift-gitops
+echo "secret: ${WEBHOOK_SECRET}"
+```
+
+### 6.2 · Get the ArgoCD server host
+
+```bash
+oc get route openshift-gitops-server -n openshift-gitops -o jsonpath='{.spec.host}{"\n"}'
+```
+
+### 6.3 · Add the webhook in GitLab
+
+Project → **Settings → Webhooks → Add new webhook**:
+
+- **URL:** `https://<argocd-host>/api/webhook`
+- **Secret token:** the `webhook.gitlab.secret` value from 6.1
+- **Trigger — Push events:** ✅ (this is the key one — branch create/update/delete
+  all fire push events, which is exactly what the SCM branch generator needs)
+- **Trigger — Merge request events:** ✅ (harmless here; needed only if you switch
+  to the PR generator)
+- **SSL verification:** enable if the ArgoCD route cert is trusted; otherwise off.
+
+### 6.4 · Verify it fires
+
+```bash
+# Watch the ApplicationSet controller receive the webhook on your next push:
+oc logs -n openshift-gitops deploy/openshift-gitops-applicationset-controller -f | grep -i webhook
+```
+
+Push a commit (or create/delete a branch) and you should see the controller
+regenerate immediately instead of waiting for the 120s poll. GitLab's webhook
+page (**Edit → Recent events**) also shows the delivery + response code.
+
+### Notes & fallbacks
+
+- **Reachability:** GitLab must reach the ArgoCD route (connectivity leg 8). A
+  public GitLab (gitlab.com) needs the route publicly reachable; if it isn't, the
+  webhook simply won't deliver and the 120s/180s polls still cover you.
+- **Older GitOps/ArgoCD:** if the ApplicationSet controller doesn't react to the
+  server webhook, lower `requeueAfterSeconds` (e.g. `30`) as a simpler speed-up.
+- The webhook is an **optimization, not a requirement** — the model is fully
+  correct on polling alone.
+
+---
+
+## 7 · When to graduate to namespace-per-branch
 
 Move to a namespace per preview only if you need **hard isolation** (separate
 NetworkPolicies/secrets per feature), **independent resource quotas**, or

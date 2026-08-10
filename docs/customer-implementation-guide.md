@@ -342,8 +342,11 @@ oc get route openshift-gitops-server -n openshift-gitops -o jsonpath='{.spec.hos
 ```
 
 Add it in GitLab → **Settings → Webhooks** (URL `https://<argocd-host>/api/webhook`,
-Push events, the secret). Without it, ArgoCD and the ApplicationSet fall back to
-their ~2–3 minute poll.
+**Push events**, the secret). The **same** endpoint drives *both* the prod
+Application and the preview **ApplicationSet** (branch create/update/delete), so
+one webhook covers everything. Without it, both fall back to their ~2–3 minute
+poll. See [preview-environments.md §6](preview-environments.md#6--instant-updates-with-a-webhook-optional)
+for verification and details.
 
 > **Expected now:** no previews exist (nothing pushed yet), and prod is empty. The
 > first branch push (Part C/D) creates a preview; the first promotion fills prod.
