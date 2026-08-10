@@ -1,0 +1,77 @@
+# Preview environments — one per open Merge Request, all in the SHARED
+# `sample-app-dev` namespace (feature-wise, not namespace-wise).
+#
+# How it works:
+#   - The GitLab Pull Request generator lists OPEN merge requests and creates
+#     one Application per MR ("sample-app-mr-<number>").
+#   - Each Application deploys gitops/base into `sample-app-dev` with a per-MR
+#     nameSuffix, a per-MR selector label, and the exact image built for the
+#     MR's head commit (head_sha). Unique names => no collisions; unique
+#     selector label => Services target only their own pods; OpenShift
+#     auto-generates a unique Route host per name.
+#   - When the MR is merged or closed, the generator drops the Application and
+#     prune removes ONLY that MR's resources from the namespace.
+#
+# Prereqs (see docs/preview-environments.md):
+#   - `sample-app-dev` already has the managed-by label + jfrog-pull secret
+#     (one namespace => provision once; nothing per-MR).
+#   - A read-only GitLab token in secret `gitlab-pr-token` (openshift-gitops)
+#     so ArgoCD can list open MRs via the API.
+#   - CI pushes the image tagged with the FULL commit SHA (see the doc).
+#
+# Replace the three __PLACEHOLDER__ values before applying.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: sample-app-preview
+  namespace: openshift-gitops
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  generators:
+    - pullRequest:
+        gitlab:
+          # Numeric project ID (Project → Settings → General) OR the URL-encoded
+          # full path. Numeric is simplest.
+          project: "__GITLAB_PROJECT_ID__"
+          api: "https://gitlab.com"
+          # Read-only token (api or read_api scope) to list open MRs.
+          tokenRef:
+            secretName: gitlab-pr-token
+            key: token
+          # Optional: only build previews for MRs carrying this label.
+          # labels:
+          #   - preview
+        requeueAfterSeconds: 120        # re-poll MRs (a webhook makes it instant)
+
+  template:
+    metadata:
+      name: "sample-app-mr-{{.number}}"
+      labels:
+        preview.capdv/mr: "{{.number}}"
+    spec:
+      project: default
+      source:
+        repoURL: "__REPO_URL__"          # https://gitlab.com/.../capdv-cluster-config.git
+        targetRevision: "{{.branch}}"    # the MR's source branch
+        path: gitops/base
+        kustomize:
+          # Unique object names per MR: sample-app-mr-<n>, svc/..., route/...
+          nameSuffix: "-mr-{{.number}}"
+          # Flows into Deployment + Service selectors so each MR's Service
+          # targets only its own pods (prevents cross-wiring in one namespace).
+          commonLabels:
+            preview.capdv/mr: "{{.number}}"
+          # Deploy the exact image built for this MR's head commit.
+          images:
+            - "sample-app-image=__IMAGE_REPO__:{{.head_sha}}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: sample-app-dev        # SHARED namespace for all previews
+      syncPolicy:
+        automated:
+          prune: true                    # remove this MR's resources on close/merge
+          selfHeal: true
+        syncOptions:
+          - ApplyOutOfSyncOnly=true

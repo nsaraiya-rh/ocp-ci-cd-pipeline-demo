@@ -38,19 +38,18 @@ workflow:
 
 build-image:
   stage: build
-  image: quay.io/buildah/stable:latest
-  variables:
-    STORAGE_DRIVER: vfs
-    BUILDAH_FORMAT: docker
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]          # required so GitLab can inject its shell
   rules:
     - if: '$CI_COMMIT_BRANCH != "main"'           # any branch except main
       changes: [ 'app/**', '.gitlab-ci.yml' ]
   script:
-    - 'cd app'
     - 'echo "Building ${IMAGE}:${CI_COMMIT_SHORT_SHA} from branch ${CI_COMMIT_REF_NAME}"'
-    - 'buildah bud --build-arg APP_VERSION="${CI_COMMIT_SHORT_SHA}" -t "${IMAGE}:${CI_COMMIT_SHORT_SHA}" -f Dockerfile .'
-    - 'buildah login -u "${JFROG_USER}" -p "${JFROG_TOKEN}" "${JFROG_URL}"'
-    - 'buildah push "${IMAGE}:${CI_COMMIT_SHORT_SHA}"'
+    - 'AUTH=$(printf "%s:%s" "${JFROG_USER}" "${JFROG_TOKEN}" | base64 | tr -d "\n")'
+    - 'mkdir -p /kaniko/.docker'
+    - 'printf "{\"auths\":{\"%s\":{\"auth\":\"%s\"}}}" "${JFROG_URL}" "${AUTH}" > /kaniko/.docker/config.json'
+    - '/kaniko/executor --context "${CI_PROJECT_DIR}/app" --dockerfile "${CI_PROJECT_DIR}/app/Dockerfile" --destination "${IMAGE}:${CI_COMMIT_SHORT_SHA}" --build-arg APP_VERSION="${CI_COMMIT_SHORT_SHA}"'
 
 deploy-dev:
   stage: deploy-dev
