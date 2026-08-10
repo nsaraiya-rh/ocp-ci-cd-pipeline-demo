@@ -64,8 +64,11 @@ promote-prod:
   script:
     - 'dnf install -y git >/dev/null'
     # The tested image = the MR source-branch tip = the merge commit's 2nd parent.
+    # A DIRECT commit to main (docs, hotfix, etc.) has no 2nd parent and is NOT a
+    # promotion — skip cleanly so it doesn't touch prod. (Requires merge method =
+    # "Merge commit" so real promotions always produce a 2nd parent.)
     - 'SRC_SHA=$(git rev-parse HEAD^2 2>/dev/null || echo "")'
-    - 'test -n "${SRC_SHA}" || { echo "No merge-commit 2nd parent. Set the project merge method to *Merge commit* (not squash / fast-forward) so prod can promote the tested image."; exit 1; }'
+    - 'if [ -z "${SRC_SHA}" ]; then echo "Not a merge commit (no 2nd parent) — direct commit to main, not a promotion. Skipping."; exit 0; fi'
     - 'echo "Promoting tested image ${SRC_SHA} to prod"'
     - 'sed -i -E "s|(newTag:)[[:space:]]*\"[^\"]*\"|\1 \"${SRC_SHA}\"|" gitops/overlays/prod/kustomization.yaml'
     - 'git config user.email "${GITLAB_USER_EMAIL}"'   # satisfies verified-committer push rule
