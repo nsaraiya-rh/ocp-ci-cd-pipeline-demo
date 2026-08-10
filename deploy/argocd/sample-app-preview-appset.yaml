@@ -3,9 +3,9 @@
 #
 # How it works:
 #   - The GitLab Pull Request generator lists OPEN merge requests and creates
-#     one Application per MR ("sample-app-mr-<number>").
-#   - Each Application deploys gitops/base into `sample-app-dev` with a per-MR
-#     nameSuffix, a per-MR selector label, and the exact image built for the
+#     one Application per source branch ("sample-app-<branch-slug>").
+#   - Each Application deploys gitops/base into `sample-app-dev` with a per-branch
+#     nameSuffix, a per-branch selector label, and the exact image built for the
 #     MR's head commit (head_sha). Unique names => no collisions; unique
 #     selector label => Services target only their own pods; OpenShift
 #     auto-generates a unique Route host per name.
@@ -47,22 +47,26 @@ spec:
 
   template:
     metadata:
-      name: "sample-app-mr-{{.number}}"
+      # DNS-safe, lowercased, hyphenated form of the source branch name.
+      name: "sample-app-{{.branch_slug}}"
       labels:
-        preview.capdv/mr: "{{.number}}"
+        preview.capdv/branch: "{{.branch_slug}}"
     spec:
       project: default
       source:
         repoURL: "__REPO_URL__"          # https://gitlab.com/.../capdv-cluster-config.git
-        targetRevision: "{{.branch}}"    # the MR's source branch
+        targetRevision: "{{.branch}}"    # the MR's source branch (raw name)
         path: gitops/base
         kustomize:
-          # Unique object names per MR: sample-app-mr-<n>, svc/..., route/...
-          nameSuffix: "-mr-{{.number}}"
-          # Flows into Deployment + Service selectors so each MR's Service
+          # Unique object names per branch: sample-app-<slug>, svc/..., route/...
+          # NOTE: keep branch names short — the auto-generated Route host is
+          # "sample-app-<slug>-sample-app-dev" and each DNS label must be <=63
+          # chars, so <slug> should stay under ~37 chars.
+          nameSuffix: "-{{.branch_slug}}"
+          # Flows into Deployment + Service selectors so each branch's Service
           # targets only its own pods (prevents cross-wiring in one namespace).
           commonLabels:
-            preview.capdv/mr: "{{.number}}"
+            preview.capdv/branch: "{{.branch_slug}}"
           # Deploy the exact image built for this MR's head commit.
           images:
             - "sample-app-image=__IMAGE_REPO__:{{.head_sha}}"

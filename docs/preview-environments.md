@@ -14,15 +14,15 @@ simplicity is the whole point of this variant.
 ```
 feature-x ─► CI build (Kaniko) ─► image :<sha>        (every push)
      │
-     └─ open MR ─► ApplicationSet (PR generator) ─► Application "sample-app-mr-<n>"
+     └─ open MR ─► ApplicationSet (PR generator) ─► Application "sample-app-<branch-slug>"
                           deploys gitops/base into sample-app-dev as:
-                            Deployment/sample-app-mr-<n>
-                            Service/sample-app-mr-<n>
-                            Route/sample-app-mr-<n>  → auto host: sample-app-mr-<n>-sample-app-dev.apps…
+                            Deployment/sample-app-<branch-slug>
+                            Service/sample-app-<branch-slug>
+                            Route/sample-app-<branch-slug>  → auto host: sample-app-<branch-slug>-sample-app-dev.apps…
                           image = :<MR head_sha>          ← developer tests here
      │
      └─ MR approved + merged (merge commit) ─► promote-prod ─► overlays/prod ─► prod (manual Sync)
-                          preview Application removed → prune deletes only MR-<n>'s objects
+                          preview Application removed → prune deletes only that branch's objects
 ```
 
 ---
@@ -33,10 +33,16 @@ Three things are made unique per MR so deployments coexist safely:
 
 | Concern | Mechanism |
 |---|---|
-| Object names collide | Kustomize `nameSuffix: -mr-<n>` → `sample-app-mr-<n>` |
-| Services select the wrong pods | Kustomize `commonLabels: {preview.capdv/mr: <n>}` — flows into **both** the Deployment and Service selectors, so each Service targets only its own pods |
-| Route hosts collide | base `route.yaml` sets **no host** → OpenShift auto-generates `sample-app-mr-<n>-sample-app-dev.apps.<domain>`, unique because the name is unique |
-| Argo prunes another MR's objects | Each generated Application tracks only its own resources; `prune: true` deletes just that MR's objects on close/merge |
+| Object names collide | Kustomize `nameSuffix: -<branch-slug>` → `sample-app-<branch-slug>` |
+| Services select the wrong pods | Kustomize `commonLabels: {preview.capdv/branch: <branch-slug>}` — flows into **both** the Deployment and Service selectors, so each Service targets only its own pods |
+| Route hosts collide | base `route.yaml` sets **no host** → OpenShift auto-generates `sample-app-<branch-slug>-sample-app-dev.apps.<domain>`, unique because the name is unique |
+| Argo prunes another branch's objects | Each generated Application tracks only its own resources; `prune: true` deletes just that branch's objects on close/merge |
+
+> **Branch-name length:** the auto-generated Route host is
+> `sample-app-<branch-slug>-sample-app-dev`, and each DNS label must be ≤63
+> chars — so keep `<branch-slug>` under ~37 characters (i.e. reasonably short
+> branch names). GitLab's `branch_slug` already lowercases and hyphenates the
+> name; it just needs to not be excessively long.
 
 Nothing else is isolated — previews share the namespace's resource quota,
 NetworkPolicies, and the `jfrog-pull` secret. That's acceptable for a dev tier;
@@ -57,8 +63,9 @@ Replace three placeholders before applying:
 | `__IMAGE_REPO__` | `globe.jfrog.io/ntg-capdv-docker-local/sample-app` |
 
 It points at `gitops/base` (not an overlay) and injects everything per-MR via
-the `kustomize` block, keyed on the PR generator's `{{.number}}`, `{{.branch}}`,
-and `{{.head_sha}}` parameters.
+the `kustomize` block, keyed on the PR generator's `{{.branch_slug}}`,
+`{{.branch}}`, and `{{.head_sha}}` parameters. (Switch `branch_slug` → `number`
+throughout the ApplicationSet if you prefer MR-number naming instead.)
 
 ### GitLab token for the PR generator
 
@@ -142,7 +149,7 @@ The prod side is otherwise unchanged: `sample-app-prod` Application tracks
 
 | Event | Result |
 |---|---|
-| Open an MR | PR generator creates `sample-app-mr-<n>`; preview deploys to `sample-app-dev`; URL is `https://sample-app-mr-<n>-sample-app-dev.apps.<domain>` |
+| Open an MR | PR generator creates `sample-app-<branch-slug>`; preview deploys to `sample-app-dev`; URL is `https://sample-app-<branch-slug>-sample-app-dev.apps.<domain>` |
 | Push more commits to the MR | New build → new `head_sha` → ApplicationSet re-syncs the preview to the new image |
 | Merge the MR (merge commit) | Preview Application removed → prune deletes MR-`<n>`'s objects; `promote-prod` copies the tested image into prod |
 | Close the MR without merging | Preview Application removed → prune cleans up; nothing promoted |
