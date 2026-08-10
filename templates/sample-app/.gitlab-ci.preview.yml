@@ -22,7 +22,11 @@
 #
 # Requirements:
 #   - CI/CD variables: JFROG_URL / JFROG_REPO / JFROG_USER / JFROG_TOKEN
-#   - Enable CI_JOB_TOKEN repo push (ci_push_repository_for_job_token_allowed=true)
+#   - Repo push for promote-prod, EITHER:
+#       * enable CI_JOB_TOKEN push (ci_push_repository_for_job_token_allowed=true), OR
+#       * set GITOPS_PUSH_TOKEN (masked) to a Project Access Token with
+#         write_repository — required when `main` is locked to "No one can push"
+#         for MR-only enforcement.
 #   - Project merge method = "Merge commit" (Settings > Merge requests)
 #   - Runner egress to gcr.io (Kaniko image) or mirror it into JFrog
 #   - This assumes real TLS (no GIT_SSL_NO_VERIFY). Add it back only for a
@@ -78,7 +82,12 @@ promote-prod:
     - 'sed -i -E "s|(newTag:)[[:space:]]*\"[^\"]*\"|\1 \"${SRC_SHA}\"|" gitops/overlays/prod/kustomization.yaml'
     - 'git config user.email "${GITLAB_USER_EMAIL}"'   # satisfies verified-committer push rule
     - 'git config user.name  "${GITLAB_USER_NAME}"'
-    - 'git remote set-url origin "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"'
+    # Push identity: use GITOPS_PUSH_TOKEN (a Project Access Token with
+    # write_repository) if set — required when `main` is locked to "No one can
+    # push" for MR-only enforcement. Otherwise fall back to the built-in
+    # CI_JOB_TOKEN (works where the group allows job-token push to protected main).
+    - 'if [ -n "${GITOPS_PUSH_TOKEN}" ]; then REMOTE="https://oauth2:${GITOPS_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"; else REMOTE="https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"; fi'
+    - 'git remote set-url origin "${REMOTE}"'
     - 'git add gitops/overlays/prod/kustomization.yaml'
     - 'git diff --cached --quiet && echo "prod already at ${SRC_SHA}" && exit 0 || true'
     - 'git commit -m "prod: promote ${SRC_SHA} [skip ci]"'
