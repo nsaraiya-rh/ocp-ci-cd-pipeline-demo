@@ -371,17 +371,38 @@ instead and swap it into the `git remote set-url` line.
 
 ### C3 · Branch protection, approval, merge method, branch cleanup
 
-Project → **Settings → Repository → Protected branches**: protect `main` (allow
-the CI/bot to push so `promote-prod` can commit the prod tag). Add an **MR
-approval rule** requiring at least one approval to merge into `main` — that
-approval is the prod gate.
+**Force all `main` changes through an MR (no direct human pushes).** This is the
+key governance control — `main` is prod. There's one subtlety: `promote-prod`
+itself pushes the tag bump to `main`, so you can't simply block *all* pushes. Use
+a dedicated push identity:
+
+1. Create a **Project Access Token** (or bot/service account): role `Maintainer`,
+   scope `write_repository`. Store it as a **masked CI variable**
+   (e.g. `GITOPS_PUSH_TOKEN`) and change the `git remote set-url` line in
+   `promote-prod` to use it instead of `CI_JOB_TOKEN`.
+2. Project → **Settings → Repository → Protected branches** → `main`:
+   - **Allowed to push and merge:** *No one* (or just that bot user) — blocks
+     direct developer pushes.
+   - **Allowed to merge:** *Maintainers* (or a reviewer group) — humans land
+     changes only via the MR merge button.
+3. Add an **MR approval rule** requiring at least one approval to merge into
+   `main` — that approval is the prod gate.
+
+With this, developers **cannot** commit to `main` directly; every change arrives
+as a reviewed merge commit, and only the bot token (or `CI_JOB_TOKEN` if your
+group permits it) pushes the promotion bump.
 
 Project → **Settings → Merge requests**:
 - **Merge method = "Merge commit"** — `promote-prod` reads the tested image from
   the merge commit's 2nd parent (`HEAD^2`). Squash/fast-forward have no 2nd
-  parent and the job fails with a clear message.
+  parent, so such a commit is treated as "not a promotion" and skipped.
 - **Enable "Delete source branch by default"** — deleting the branch on merge is
   what tears down its preview environment.
+
+> **Path filter:** `promote-prod` only runs when a merge changes `app/**` or
+> `gitops/**` (see its `rules: changes:`), so docs/README/CI-only changes on
+> `main` never promote. Combined with the "skip non-merge commit" guard, prod is
+> only ever touched by a reviewed merge that changed application or deploy config.
 
 > **Committer identity:** the pipeline commits as `${GITLAB_USER_EMAIL}` to
 > satisfy a "verified committer" push rule. Nothing to configure if your GitLab

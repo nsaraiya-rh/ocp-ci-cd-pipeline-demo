@@ -60,7 +60,12 @@ promote-prod:
   stage: promote-prod
   image: registry.access.redhat.com/ubi9/ubi:latest
   rules:
+    # Only consider a promotion when the merge actually touched app or deploy
+    # config — docs/README/CI-only changes on main never promote.
     - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - 'app/**'
+        - 'gitops/**'
   script:
     - 'dnf install -y git >/dev/null'
     # The tested image = the MR source-branch tip = the merge commit's 2nd parent.
