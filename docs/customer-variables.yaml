@@ -71,23 +71,28 @@ tls:
 argocd:
   namespace:      "openshift-gitops"
 
-  # Environment-branch model: both Applications point at the SAME monorepo, but
-  # track different BRANCHES (and their matching overlay path).
+  # Preview-environment model:
+  #   - dev is driven by an ApplicationSet (SCM branch generator) that creates one
+  #     Application per branch, all deployed into the shared sample-app-dev namespace.
+  #   - prod is a single Application tracking `main`, manual-sync.
+  applicationset:
+    - name:       "sample-app-preview"     # branch generator → sample-app-<branch-slug>
+      path:       "gitops/base"
+      namespace:  "sample-app-dev"         # shared; all previews land here
+      auto_sync:  true                     # each preview deploys automatically
+      image_tag:  "{{.sha}}"               # exact image built for the branch head
   applications:
-    - name:       "sample-app-dev"
-      branch:     "dev"                    # targetRevision
-      path:       "gitops/overlays/dev"
-      namespace:  "sample-app-dev"
-      auto_sync:  true                     # dev deploys automatically
     - name:       "sample-app-prod"
       branch:     "main"                   # targetRevision
       path:       "gitops/overlays/prod"
       namespace:  "sample-app-prod"
       auto_sync:  false                    # manual sync; MR into main is the gate
 
-# Flow: push ANY branch -> build + deploy dev (CI writes the tag into overlays/dev
-# on the `dev` branch, which ArgoCD dev tracks).  MR any-branch->`main`, merge ->
-# promote-prod copies dev's image tag to overlays/prod on main -> human Syncs prod.
+# Flow: push ANY matching branch -> Kaniko build -> JFrog :<sha>; the preview
+# ApplicationSet deploys sample-app-<branch-slug> into sample-app-dev.  MR into
+# `main`, merge (merge commit) -> promote-prod copies the tested image (HEAD^2)
+# to overlays/prod on main -> human Syncs prod.  Delete the branch -> preview
+# pruned.  See docs/preview-environments.md.
 
 
 workloads:
