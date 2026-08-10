@@ -5,3 +5,9 @@ resources:
   - deployment.yaml
   - service.yaml
   - route.yaml
+
+# Make nameSuffix/namePrefix also rewrite Route.spec.to.name (Route is a CRD, so
+# kustomize doesn't know it references a Service by default). Critical for the
+# preview model, where each branch's Route must target its own suffixed Service.
+configurations:
+  - kustomizeconfig.yaml

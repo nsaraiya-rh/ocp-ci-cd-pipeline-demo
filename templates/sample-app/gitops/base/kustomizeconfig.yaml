@@ -1,0 +1,11 @@
+# Teach kustomize that an OpenShift Route's spec.to.name references a Service.
+# Route is a CRD, so it's NOT in kustomize's built-in name-reference rules —
+# without this, nameSuffix/namePrefix rename the Service and Route but leave
+# Route.spec.to.name pointing at the original Service name (so the Route serves
+# the wrong pods). Referenced from kustomization.yaml `configurations:`.
+nameReference:
+  - kind: Service
+    version: v1
+    fieldSpecs:
+      - kind: Route
+        path: spec/to/name
