@@ -252,9 +252,16 @@ page (**Edit → Recent events**) also shows the delivery + response code.
 
 ### Notes & fallbacks
 
-- **Reachability:** GitLab must reach the ArgoCD route (connectivity leg 8). A
-  public GitLab (gitlab.com) needs the route publicly reachable; if it isn't, the
-  webhook simply won't deliver and the 120s/180s polls still cover you.
+- **Reachability (inbound):** GitLab must reach the ArgoCD route (connectivity
+  leg 8). **Public gitlab.com cannot reach an internal cluster** — you'll see the
+  delivery fail with **`URL is blocked: Host cannot be resolved or invalid`**, and
+  GitLab marks the webhook "temporarily disabled." This is expected: only the
+  *inbound* push-notification is blocked; the cluster's *outbound* clone/branch
+  listing still works, so **polling is fully functional** — just lower
+  `requeueAfterSeconds` (e.g. `30`) and skip the webhook. In the real target
+  environment (**self-managed GitLab inside the same network** as OpenShift),
+  GitLab *can* resolve the internal route, so the webhook works there — set it up
+  in that env, not against gitlab.com.
 - **Older GitOps/ArgoCD:** if the ApplicationSet controller doesn't react to the
   server webhook, lower `requeueAfterSeconds` (e.g. `30`) as a simpler speed-up.
 - The webhook is an **optimization, not a requirement** — the model is fully
