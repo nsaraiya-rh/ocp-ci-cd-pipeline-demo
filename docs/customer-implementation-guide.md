@@ -14,9 +14,8 @@ teams can review it before anything is applied.
 > model: each feature branch gets its own live deployment in a shared namespace,
 > and merging to `main` promotes the tested image to prod. The reference repo
 > also ships a simpler **shared-dev** model (one dev environment, driven by a
-> long-lived `dev` branch) used by the demo `install.sh`. If you want that
-> instead, follow the git history / `templates/sample-app/.gitlab-ci.yml`; this
-> guide is the preview flow.
+> long-lived `dev` branch); if you want that instead, use
+> `templates/sample-app/.gitlab-ci.yml`. This guide is the preview flow.
 
 ---
 
@@ -37,16 +36,15 @@ teams can review it before anything is applied.
 
 ## 1 · What this is (and is not)
 
-The demo ships an `install.sh` that provisions an **in-cluster** GitLab, a
-runner, and self-signed TLS. **You will not run that script.** You already have
-GitLab Enterprise, JFrog, and (likely) shared runners. This guide performs only
+You already have **GitLab Enterprise**, **JFrog Artifactory**, and (likely)
+shared runners, so you do **not** stand any of those up. This guide performs only
 the subset that applies to your environment:
 
-| Demo installer stage | In your environment |
+| Component | In your environment |
 |---|---|
 | OpenShift GitOps operator (ArgoCD) | **Install** — or reuse if ArgoCD already runs |
 | dev / prod namespaces + JFrog pull secrets | **Create** |
-| in-cluster GitLab, custom SCC, self-signed TLS, GitLab Helm install | **Skip** — you have these already |
+| GitLab, custom SCC, TLS | **Skip** — you have these already |
 | GitLab runner registration | **Adapt** — use your existing runner pool |
 | GitLab project, seed content, CI variables | **Create** in your GitLab |
 | ArgoCD repository secret, **preview ApplicationSet + prod Application**, webhook | **Create** |
