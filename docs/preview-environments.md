@@ -1,9 +1,10 @@
-# Preview environments — one per MR, shared `sample-app-dev` namespace
+# Preview environments — one per branch, shared `sample-app-dev` namespace
 
-An alternative to the shared "latest push wins" dev model. Each **open merge
-request** gets its own live, testable deployment — but all previews live in the
-**single `sample-app-dev` namespace**, distinguished by name (feature-wise), not
-by namespace. Merge to `main` still promotes the tested image to prod.
+An alternative to the shared "latest push wins" dev model. Each **feature
+branch** gets its own live, testable deployment **on push** — but all previews
+live in the **single `sample-app-dev` namespace**, distinguished by name
+(feature-wise), not by namespace. Merge to `main` still promotes the tested image
+to prod.
 
 **Why one namespace:** the two things that must exist for every deployment — the
 `argocd.argoproj.io/managed-by` label (RBAC) and the `jfrog-pull` secret — are
@@ -11,25 +12,30 @@ provisioned **once** on `sample-app-dev`. No per-branch namespace creation, no
 Kyverno/ESO secret propagation, no ephemeral-namespace RBAC. That operational
 simplicity is the whole point of this variant.
 
+**Trigger model:** previews are **branch-triggered** — the ApplicationSet's SCM
+Provider (branch) generator watches branches matching a pattern, so a preview
+appears as soon as you push such a branch (no MR required). An MR is still how
+you get to prod, but it is not needed for a preview.
+
 ```
-feature-x ─► CI build (Kaniko) ─► image :<sha>        (every push)
+push feature-x ─► CI build (Kaniko) ─► image :<sha>        (every push)
      │
-     └─ open MR ─► ApplicationSet (PR generator) ─► Application "sample-app-<branch-slug>"
+     └─ branch matches pattern ─► ApplicationSet (branch generator) ─► Application "sample-app-<branch-slug>"
                           deploys gitops/base into sample-app-dev as:
                             Deployment/sample-app-<branch-slug>
                             Service/sample-app-<branch-slug>
                             Route/sample-app-<branch-slug>  → auto host: sample-app-<branch-slug>-sample-app-dev.apps…
-                          image = :<MR head_sha>          ← developer tests here
+                          image = :<branch head sha>       ← developer tests here
      │
-     └─ MR approved + merged (merge commit) ─► promote-prod ─► overlays/prod ─► prod (manual Sync)
-                          preview Application removed → prune deletes only that branch's objects
+     └─ open MR → main, approve, merge (merge commit) ─► promote-prod ─► overlays/prod ─► prod (manual Sync)
+     └─ delete the branch ─► preview Application removed → prune deletes only that branch's objects
 ```
 
 ---
 
 ## 1 · How isolation works inside one namespace
 
-Three things are made unique per MR so deployments coexist safely:
+Three things are made unique per branch so deployments coexist safely:
 
 | Concern | Mechanism |
 |---|---|
@@ -54,25 +60,30 @@ can't starve the others.
 ## 2 · The ApplicationSet
 
 See [`deploy/argocd/sample-app-preview-appset.yaml`](../deploy/argocd/sample-app-preview-appset.yaml).
-Replace three placeholders before applying:
+Replace two placeholders before applying (the group path is set directly in the
+generator — edit it there too):
 
 | Placeholder | Value |
 |---|---|
-| `__GITLAB_PROJECT_ID__` | Numeric project ID (Project → Settings → General) |
 | `__REPO_URL__` | `https://gitlab.com/globetelecom/…/capdv-cluster-config.git` |
 | `__IMAGE_REPO__` | `globe.jfrog.io/ntg-capdv-docker-local/sample-app` |
 
-It points at `gitops/base` (not an overlay) and injects everything per-MR via
-the `kustomize` block, keyed on the PR generator's `{{.branch_slug}}`,
-`{{.branch}}`, and `{{.head_sha}}` parameters. (Switch `branch_slug` → `number`
-throughout the ApplicationSet if you prefer MR-number naming instead.)
+It uses the **SCM Provider (branch) generator** scoped to the group, filtered to
+`capdv-cluster-config` and to branches matching
+`^(feature|feat|fix|hotfix|bugfix|chore)[/-].*`. It points at `gitops/base` and
+injects everything per-branch via the `kustomize` block, keyed on the generator's
+`{{.branchNormalized}}`, `{{.branch}}`, and `{{.sha}}` parameters.
 
-### GitLab token for the PR generator
+> **The `branchMatch` pattern must NOT match `main`** (main is prod). RE2 has no
+> negative lookahead, so the default uses a prefix convention rather than
+> "everything except main." Adjust the regex to your team's branch naming.
 
-ArgoCD needs a **read-only** GitLab token to list open MRs:
+### GitLab token for the branch generator
+
+ArgoCD needs a **read-only** GitLab token to list branches:
 
 ```bash
-oc create secret generic gitlab-pr-token -n openshift-gitops \
+oc create secret generic gitlab-scm-token -n openshift-gitops \
   --from-literal=token='<gitlab token with read_api scope>'
 ```
 
@@ -89,9 +100,9 @@ dev/preview.
 
 ### build-image — build on every branch push, tag with the FULL SHA
 
-The ApplicationSet deploys `:{{.head_sha}}` (the full 40-char SHA), so the image
-for **every** commit on a branch must exist. Build on every non-`main` push and
-push both the full and short SHA tags:
+The ApplicationSet deploys `:{{.sha}}` (the full 40-char branch head SHA), so the
+image for **every** commit on a branch must exist. Build on every non-`main` push
+and push both the full and short SHA tags:
 
 ```yaml
 build-image:
@@ -149,10 +160,10 @@ The prod side is otherwise unchanged: `sample-app-prod` Application tracks
 
 | Event | Result |
 |---|---|
-| Open an MR | PR generator creates `sample-app-<branch-slug>`; preview deploys to `sample-app-dev`; URL is `https://sample-app-<branch-slug>-sample-app-dev.apps.<domain>` |
-| Push more commits to the MR | New build → new `head_sha` → ApplicationSet re-syncs the preview to the new image |
-| Merge the MR (merge commit) | Preview Application removed → prune deletes MR-`<n>`'s objects; `promote-prod` copies the tested image into prod |
-| Close the MR without merging | Preview Application removed → prune cleans up; nothing promoted |
+| Push a matching branch | Branch generator creates `sample-app-<branch-slug>`; preview deploys to `sample-app-dev`; URL is `https://sample-app-<branch-slug>-sample-app-dev.apps.<domain>` |
+| Push more commits | New build → new head SHA → ApplicationSet re-reads the branch and re-syncs the preview to the new image |
+| Open an MR → `main`, approve, merge (merge commit) | `promote-prod` copies the tested image into prod (the MR is the prod gate, not the preview trigger) |
+| **Delete the branch** | Preview Application removed → prune deletes only that branch's objects |
 
 ---
 
@@ -160,11 +171,20 @@ The prod side is otherwise unchanged: `sample-app-prod` Application tracks
 
 1. `sample-app-dev` namespace: `argocd.argoproj.io/managed-by=openshift-gitops`
    label **and** `jfrog-pull` secret — already in place.
-2. `gitlab-pr-token` secret in `openshift-gitops` (read-only GitLab token).
+2. `gitlab-scm-token` secret in `openshift-gitops` (read-only GitLab token, `read_api`).
 3. CI variables `JFROG_URL/REPO/USER/TOKEN`, `ci_push_repository_for_job_token_allowed=true`,
    protected `main` with approval, merge method = **Merge commit**.
 4. Apply the ApplicationSet; retire the old single dev Application + the
    `deploy-dev` CI job.
+5. **Enable "Delete source branch" on merge** (Settings → Merge requests) — or
+   delete branches manually. Previews are torn down when the branch is deleted,
+   so leaving merged branches around leaves their previews running.
+
+**Re-sync timing:** the branch generator re-polls GitLab every
+`requeueAfterSeconds` (120s in the manifest); within that window it picks up new
+branches, new head commits, and deleted branches. Point a GitLab **push webhook**
+at the ApplicationSet controller's webhook endpoint to make it near-instant
+instead of waiting for the poll.
 
 ---
 

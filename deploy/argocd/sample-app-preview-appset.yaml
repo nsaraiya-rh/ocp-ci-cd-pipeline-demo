@@ -1,25 +1,28 @@
-# Preview environments — one per open Merge Request, all in the SHARED
+# Preview environments — one per BRANCH (push-triggered), all in the SHARED
 # `sample-app-dev` namespace (feature-wise, not namespace-wise).
 #
 # How it works:
-#   - The GitLab Pull Request generator lists OPEN merge requests and creates
-#     one Application per source branch ("sample-app-<branch-slug>").
+#   - The GitLab SCM Provider generator lists branches in the project that match
+#     `branchMatch` and creates one Application per branch
+#     ("sample-app-<branch-slug>"). No merge request required — a preview appears
+#     as soon as you push a matching branch.
 #   - Each Application deploys gitops/base into `sample-app-dev` with a per-branch
 #     nameSuffix, a per-branch selector label, and the exact image built for the
-#     MR's head commit (head_sha). Unique names => no collisions; unique
+#     branch's head commit ({{.sha}}). Unique names => no collisions; unique
 #     selector label => Services target only their own pods; OpenShift
 #     auto-generates a unique Route host per name.
-#   - When the MR is merged or closed, the generator drops the Application and
-#     prune removes ONLY that MR's resources from the namespace.
+#   - When the branch is DELETED, the generator drops the Application and prune
+#     removes ONLY that branch's resources. (So delete the source branch on
+#     merge — or enable "Delete source branch" — to tear previews down.)
 #
 # Prereqs (see docs/preview-environments.md):
 #   - `sample-app-dev` already has the managed-by label + jfrog-pull secret
-#     (one namespace => provision once; nothing per-MR).
-#   - A read-only GitLab token in secret `gitlab-pr-token` (openshift-gitops)
-#     so ArgoCD can list open MRs via the API.
+#     (one namespace => provision once; nothing per-branch).
+#   - A read-only GitLab token in secret `gitlab-scm-token` (openshift-gitops)
+#     so ArgoCD can list branches via the API.
 #   - CI pushes the image tagged with the FULL commit SHA (see the doc).
 #
-# Replace the three __PLACEHOLDER__ values before applying.
+# Replace the two __PLACEHOLDER__ values before applying.
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
@@ -30,52 +33,55 @@ spec:
   goTemplateOptions: ["missingkey=error"]
 
   generators:
-    - pullRequest:
+    - scmProvider:
         gitlab:
-          # Numeric project ID (Project → Settings → General) OR the URL-encoded
-          # full path. Numeric is simplest.
-          project: "__GITLAB_PROJECT_ID__"
+          # Full (nested) group path that CONTAINS the project.
+          group: "globetelecom/platforms/ntg-redhat-capability-development-program/Applications"
           api: "https://gitlab.com"
-          # Read-only token (api or read_api scope) to list open MRs.
+          allBranches: true              # generate for every branch, not just default
+          includeSubgroups: false
           tokenRef:
-            secretName: gitlab-pr-token
+            secretName: gitlab-scm-token
             key: token
-          # Optional: only build previews for MRs carrying this label.
-          # labels:
-          #   - preview
-        requeueAfterSeconds: 120        # re-poll MRs (a webhook makes it instant)
+        # Only these branches get a preview. This MUST NOT match `main`
+        # (main is prod). RE2 has no negative lookahead, so use a prefix
+        # convention instead of "everything except main".
+        filters:
+          - repositoryMatch: "^capdv-cluster-config$"
+            branchMatch: "^(feature|feat|fix|hotfix|bugfix|chore)[/-].*"
+        requeueAfterSeconds: 120         # re-poll branches (a webhook makes it instant)
 
   template:
     metadata:
-      # DNS-safe, lowercased, hyphenated form of the source branch name.
-      name: "sample-app-{{.branch_slug}}"
+      # DNS-safe, lowercased, hyphenated form of the branch name.
+      name: "sample-app-{{.branchNormalized}}"
       labels:
-        preview.capdv/branch: "{{.branch_slug}}"
+        preview.capdv/branch: "{{.branchNormalized}}"
     spec:
       project: default
       source:
         repoURL: "__REPO_URL__"          # https://gitlab.com/.../capdv-cluster-config.git
-        targetRevision: "{{.branch}}"    # the MR's source branch (raw name)
+        targetRevision: "{{.branch}}"    # the branch itself (raw name)
         path: gitops/base
         kustomize:
           # Unique object names per branch: sample-app-<slug>, svc/..., route/...
           # NOTE: keep branch names short — the auto-generated Route host is
           # "sample-app-<slug>-sample-app-dev" and each DNS label must be <=63
           # chars, so <slug> should stay under ~37 chars.
-          nameSuffix: "-{{.branch_slug}}"
+          nameSuffix: "-{{.branchNormalized}}"
           # Flows into Deployment + Service selectors so each branch's Service
           # targets only its own pods (prevents cross-wiring in one namespace).
           commonLabels:
-            preview.capdv/branch: "{{.branch_slug}}"
-          # Deploy the exact image built for this MR's head commit.
+            preview.capdv/branch: "{{.branchNormalized}}"
+          # Deploy the exact image built for this branch's head commit.
           images:
-            - "sample-app-image=__IMAGE_REPO__:{{.head_sha}}"
+            - "sample-app-image=__IMAGE_REPO__:{{.sha}}"
       destination:
         server: https://kubernetes.default.svc
         namespace: sample-app-dev        # SHARED namespace for all previews
       syncPolicy:
         automated:
-          prune: true                    # remove this MR's resources on close/merge
+          prune: true                    # remove this branch's resources on delete
           selfHeal: true
         syncOptions:
           - ApplyOutOfSyncOnly=true
