@@ -313,21 +313,29 @@ oc create secret generic gitlab-scm-token -n openshift-gitops \
   --from-literal=token="${GITLAB_SCM_TOKEN}"
 ```
 
-### B6 · Apply the preview ApplicationSet + the prod Application
+### B6 · Apply the AppProject, preview ApplicationSet, and prod Application
 
 Edit [`deploy/argocd/sample-app-preview-appset.yaml`](../deploy/argocd/sample-app-preview-appset.yaml):
 set the `group` path, `__REPO_URL__`, and `__IMAGE_REPO__`, and confirm the
-`branchMatch` regex fits your branch naming (it must **not** match `main`). Then:
+`branchMatch` regex fits your branch naming (it must **not** match `main`).
+Apply the **AppProject first** (the apps reference it):
 
 ```bash
+oc apply -f <reference-repo>/deploy/argocd/sample-app-project.yaml          # AppProject + prod sync window
 oc apply -f <reference-repo>/deploy/argocd/sample-app-preview-appset.yaml   # dev previews
 oc apply -f <reference-repo>/deploy/argocd/sample-app-prod.yaml             # prod (edit repoURL)
 ```
 
+- **`sample-app` (AppProject)** — groups the apps and carries the **prod deploy
+  window** (scoped to `sample-app-prod` only). See
+  [preview-environments.md §7](preview-environments.md#7--scheduled-prod-deployments-sync-window).
 - **`sample-app-preview` (ApplicationSet)** — SCM branch generator → one
   auto-synced Application per matching branch, deployed into `sample-app-dev`.
 - **`sample-app-prod` (Application)** — tracks `main`, path `gitops/overlays/prod`,
-  **no automated block** → deploys only when a human clicks Sync.
+  **auto-sync gated by the sync window**: a promotion deploys automatically at the
+  next window (outside it, it queues). Want a hard human gate instead? Remove the
+  `automated:` block from `sample-app-prod.yaml` and sync manually (and drop the
+  window).
 
 ### B7 · Wire the GitLab → ArgoCD webhook (optional, instant sync)
 
@@ -432,9 +440,11 @@ creates `sample-app-feature-100` and deploys it to `sample-app-dev`. Test at
 
 **2 — Promote to prod:** open an **MR `feature-100` → `main`**, get it approved,
 **merge (as a merge commit)**. `promote-prod` reads `HEAD^2` (the tested tip),
-writes that tag into `overlays/prod`, and pushes to `main` — no rebuild. Then
-**Sync `sample-app-prod`** in the ArgoCD UI (or
-`oc patch application sample-app-prod -n openshift-gitops --type=merge -p '{"operation":{"sync":{"revision":"main"}}}'`).
+writes that tag into `overlays/prod`, and pushes to `main` — no rebuild.
+`sample-app-prod` then deploys **automatically at the next sync window** (it shows
+OutOfSync / "blocked by sync window" until then). To deploy immediately —
+emergency, or if you kept prod on manual sync — force it: **Sync** in the ArgoCD
+UI, or `oc patch application sample-app-prod -n openshift-gitops --type=merge -p '{"operation":{"sync":{"revision":"main"}}}'`.
 
 **3 — Cleanup:** deleting `feature-100` (automatic if you enabled it) removes the
 preview Application and prunes `sample-app-feature-100` from `sample-app-dev`.

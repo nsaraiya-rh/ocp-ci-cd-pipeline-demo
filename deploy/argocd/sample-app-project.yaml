@@ -1,0 +1,46 @@
+---
+# AppProject for sample-app — groups the per-branch preview Applications and the
+# prod Application, and carries the PROD DEPLOYMENT WINDOW (an ArgoCD sync window).
+#
+# Apply this BEFORE the ApplicationSet / prod Application: both reference it via
+# `spec.project: sample-app`. An Application in a project that doesn't exist yet
+# will error with "application references project sample-app which does not exist".
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: sample-app
+  namespace: openshift-gitops
+spec:
+  description: sample-app previews (dev) + prod, with a scheduled prod deploy window.
+
+  # Where apps in this project may pull from. Restrict to your repo for least
+  # privilege — replace '*' with https://<host>/<group>/<project>.git.
+  sourceRepos:
+    - '*'
+
+  # Where apps in this project may deploy — only the two app namespaces.
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: sample-app-dev      # all previews land here
+    - server: https://kubernetes.default.svc
+      namespace: sample-app-prod     # prod
+
+  # The app is fully namespaced (Deployment/Service/Route) — no cluster-scoped
+  # resources are permitted.
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'
+
+  # ---- Prod deployment window ------------------------------------------------
+  # Scoped to sample-app-prod ONLY, so preview apps (sample-app-<branch>) keep
+  # deploying instantly. kind:allow => prod may sync ONLY inside the window;
+  # a promotion merged outside it queues (OutOfSync) until the window opens.
+  syncWindows:
+    - kind: allow
+      schedule: "0 2 * * *"          # cron: 02:00 daily — set to your maintenance window
+      duration: 1h                   # window open 02:00–03:00
+      applications:
+        - sample-app-prod
+      manualSync: true               # let an operator force an emergency deploy (audited)
+      timeZone: "Asia/Manila"        # remove if your ArgoCD < 2.8; then use a UTC cron

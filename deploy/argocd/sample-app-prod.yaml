@@ -1,15 +1,20 @@
 ---
 # ArgoCD Application: prod environment (monorepo).
-# NOT auto-synced. Promotion is a reviewed MR in the same sample-app project
-# that changes gitops/overlays/prod/kustomization.yaml newTag. Once merged,
-# a human syncs this Application from the ArgoCD UI (or CLI).
+# Auto-synced, but GATED by the sync window on the `sample-app` AppProject
+# (deploy/argocd/sample-app-project.yaml): a reviewed MR promotes the tested
+# image into gitops/overlays/prod, and ArgoCD deploys it AUTOMATICALLY at the
+# next allowed window. Outside the window it queues (OutOfSync). manualSync in
+# the window lets an operator force an emergency deploy.
+#
+# Prefer a hard human gate instead of a schedule? Remove the `automated:` block
+# below and sync manually (and you can drop the sync window).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: sample-app-prod
   namespace: openshift-gitops
 spec:
-  project: default
+  project: sample-app
   source:
     # Substituted by install.sh with the actual GitLab host.
     repoURL: https://__GITLAB_HOST__/root/sample-app.git
@@ -19,7 +24,10 @@ spec:
     server: https://kubernetes.default.svc
     namespace: sample-app-prod
   syncPolicy:
-    # No `automated:` block on purpose — sync only when a human triggers it.
+    # Auto-sync — but only fires inside the AppProject's prod sync window.
+    automated:
+      prune: true
+      selfHeal: true
     syncOptions:
       - CreateNamespace=true
       - ApplyOutOfSyncOnly=true

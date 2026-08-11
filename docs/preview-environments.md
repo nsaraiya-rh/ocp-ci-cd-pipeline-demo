@@ -269,7 +269,68 @@ page (**Edit → Recent events**) also shows the delivery + response code.
 
 ---
 
-## 7 · When to graduate to namespace-per-branch
+## 7 · Scheduled prod deployments (sync window)
+
+By default prod is **manual-sync** — a human clicks Sync. To instead **approve/
+merge any time but deploy prod only within a maintenance window**, use an ArgoCD
+**sync window** + auto-sync on prod. Both are baked into the reference:
+
+| File | Role |
+|---|---|
+| [`deploy/argocd/sample-app-project.yaml`](../deploy/argocd/sample-app-project.yaml) | `sample-app` AppProject carrying the window (scoped to `sample-app-prod` only) |
+| [`deploy/argocd/sample-app-prod.yaml`](../deploy/argocd/sample-app-prod.yaml) | prod set to `syncPolicy.automated`, `project: sample-app` |
+| [`deploy/argocd/sample-app-preview-appset.yaml`](../deploy/argocd/sample-app-preview-appset.yaml) | previews use `project: sample-app` too — but are **not** in the window, so they deploy instantly |
+
+### Behavior
+
+```
+merge (any time) → promote-prod → prod OutOfSync ("blocked by sync window", queued)
+       … waits …
+window opens → ArgoCD auto-syncs → prod live
+```
+
+It's entirely in-cluster (ArgoCD's own scheduler) — no webhook, no external
+dependency, so it works despite an unreachable-from-GitLab cluster.
+
+### Apply order — project first
+
+```bash
+oc apply -f deploy/argocd/sample-app-project.yaml       # must exist before the apps
+oc apply -f deploy/argocd/sample-app-preview-appset.yaml
+oc apply -f deploy/argocd/sample-app-prod.yaml
+```
+
+### Tuning the window (in `sample-app-project.yaml`)
+
+- **`kind: allow`** → prod syncs *only* inside the window. (`kind: deny` = freeze *during* the window, deploy outside it.)
+- **`schedule`** (cron) + **`duration`** → set to your maintenance window.
+- **`applications: [sample-app-prod]`** → **critical** — scopes the window to prod so previews aren't frozen.
+- **`manualSync: true`** → an operator can force an emergency deploy outside the window (audited); `false` = hard freeze.
+- **`timeZone`** → requires ArgoCD ≥ 2.8; on older versions omit it and express the cron in **UTC**.
+
+### Holding back a specific approved change
+
+With auto-sync, prod deploys everything merged. To *not* deploy a particular approved change:
+- **Don't merge it** — approval permits merging; merge is the deploy intent. (Cleanest.)
+- Or **revert it on `main` before the window opens** — the window's delay is a built-in cancellation window.
+- Or **pause auto-sync** on `sample-app-prod` to hold everything temporarily.
+
+### Verify
+
+```bash
+oc get appproject sample-app -n openshift-gitops -o jsonpath='{.spec.syncWindows}{"\n"}'
+oc get application sample-app-prod -n openshift-gitops -o jsonpath='{.spec.syncPolicy.automated}{"\n"}'
+```
+
+### Prefer a hard human gate instead?
+
+Keep prod **manual** (remove the `automated:` block from `sample-app-prod.yaml`) and
+drop the window — the human Sync click is then the gate (the original model). You
+lose the schedule but gain a per-deploy human decision.
+
+---
+
+## 8 · When to graduate to namespace-per-branch
 
 Move to a namespace per preview only if you need **hard isolation** (separate
 NetworkPolicies/secrets per feature), **independent resource quotas**, or

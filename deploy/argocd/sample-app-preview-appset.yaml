@@ -58,7 +58,7 @@ spec:
       labels:
         preview.capdv/branch: "{{.branchNormalized}}"
     spec:
-      project: default
+      project: sample-app                # same AppProject as prod (carries the sync window)
       source:
         repoURL: "__REPO_URL__"          # https://gitlab.com/.../capdv-cluster-config.git
         targetRevision: "{{.branch}}"    # the branch itself (raw name)
