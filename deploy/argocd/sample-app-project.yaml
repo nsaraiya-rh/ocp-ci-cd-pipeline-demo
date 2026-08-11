@@ -13,10 +13,9 @@ metadata:
 spec:
   description: sample-app previews (dev) + prod, with a scheduled prod deploy window.
 
-  # Where apps in this project may pull from. Restrict to your repo for least
-  # privilege — replace '*' with https://<host>/<group>/<project>.git.
+  # Where apps in this project may pull from.
   sourceRepos:
-    - '*'
+    - 'https://gitlab.com/globetelecom/platforms/ntg-redhat-capability-development-program/Applications/capdv-cluster-config.git'
 
   # Where apps in this project may deploy — only the two app namespaces.
   destinations:

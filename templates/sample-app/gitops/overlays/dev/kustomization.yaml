@@ -15,6 +15,5 @@ commonLabels:
 
 images:
   - name: sample-app-image
-    # Replaced by install.sh with the actual JFrog registry path.
-    newName: __IMAGE_REPO__
+    newName: globe.jfrog.io/ntg-capdv-docker-local/sample-app
     newTag: "initial"

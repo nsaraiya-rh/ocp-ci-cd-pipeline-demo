@@ -60,7 +60,7 @@ spec:
     spec:
       project: sample-app                # same AppProject as prod (carries the sync window)
       source:
-        repoURL: "__REPO_URL__"          # https://gitlab.com/.../capdv-cluster-config.git
+        repoURL: "https://gitlab.com/globetelecom/platforms/ntg-redhat-capability-development-program/Applications/capdv-cluster-config.git"
         targetRevision: "{{.branch}}"    # the branch itself (raw name)
         path: gitops/base
         kustomize:
@@ -75,7 +75,7 @@ spec:
             preview.capdv/branch: "{{.branchNormalized}}"
           # Deploy the exact image built for this branch's head commit.
           images:
-            - "sample-app-image=__IMAGE_REPO__:{{.sha}}"
+            - "sample-app-image=globe.jfrog.io/ntg-capdv-docker-local/sample-app:{{.sha}}"
       destination:
         server: https://kubernetes.default.svc
         namespace: sample-app-dev        # SHARED namespace for all previews

@@ -10,8 +10,7 @@ metadata:
 spec:
   project: default
   source:
-    # Substituted by install.sh with the actual GitLab host.
-    repoURL: https://__GITLAB_HOST__/root/sample-app.git
+    repoURL: https://gitlab.com/globetelecom/platforms/ntg-redhat-capability-development-program/Applications/capdv-cluster-config.git
     targetRevision: dev
     path: gitops/overlays/dev
   destination:
