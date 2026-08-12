@@ -11,3 +11,10 @@ replicas:
     count: 1
   - name: api
     count: 1
+
+# Built frontend image. `newName` must match ${JFROG_URL}/${JFROG_REPO} in CI;
+# `newTag` is bumped by the deploy-dev CI job on each push (starts at "initial").
+images:
+  - name: frontend-image
+    newName: globe.jfrog.io/ntg-capdv-docker-local/three-tier-frontend
+    newTag: "initial"

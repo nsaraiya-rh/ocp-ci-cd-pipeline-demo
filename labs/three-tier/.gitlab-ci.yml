@@ -1,0 +1,88 @@
+# Three-tier lab CI/CD — FULL CI + CD for the frontend tier.
+#   On a push to ANY branch except main (frontend source changed):
+#     build-image  -> Kaniko builds app/frontend -> JFrog :<sha>
+#     deploy-dev   -> writes that tag into gitops/overlays/dev on the SAME branch;
+#                     your per-user dev Application (tracking your branch) then
+#                     auto-syncs the built image into your dev namespace.
+#   On merge of an MR into main:
+#     promote-prod -> copies the tested dev tag into gitops/overlays/prod; the
+#                     shared prod Application deploys it. No rebuild.
+#
+# The api / mysql / adminer tiers use public images (no build) — only the
+# frontend is built here, which is enough to teach the CI half.
+#
+# CI/CD variables (Settings > CI/CD > Variables): JFROG_URL / JFROG_REPO /
+# JFROG_USER / JFROG_TOKEN. Push-back uses GITOPS_PUSH_TOKEN if set, else
+# CI_JOB_TOKEN (enable ci_push_repository_for_job_token_allowed). JFROG_URL/REPO
+# must match the overlays' image newName (…/three-tier-frontend).
+
+stages:
+  - build
+  - deploy-dev
+  - promote-prod
+
+variables:
+  IMAGE: "${JFROG_URL}/${JFROG_REPO}/three-tier-frontend"
+
+workflow:
+  rules:
+    - if: '$CI_COMMIT_MESSAGE =~ /\[skip ci\]/'
+      when: never
+    - if: '$CI_COMMIT_BRANCH'
+
+build-image:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  rules:
+    - if: '$CI_COMMIT_BRANCH != "main"'
+      changes: [ 'app/frontend/**', '.gitlab-ci.yml' ]
+  script:
+    - 'echo "Building ${IMAGE}:${CI_COMMIT_SHORT_SHA} from ${CI_COMMIT_REF_NAME}"'
+    - 'AUTH=$(printf "%s:%s" "${JFROG_USER}" "${JFROG_TOKEN}" | base64 | tr -d "\n")'
+    - 'mkdir -p /kaniko/.docker'
+    - 'printf "{\"auths\":{\"%s\":{\"auth\":\"%s\"}}}" "${JFROG_URL}" "${AUTH}" > /kaniko/.docker/config.json'
+    - '/kaniko/executor --context "${CI_PROJECT_DIR}/app/frontend" --dockerfile "${CI_PROJECT_DIR}/app/frontend/Dockerfile" --destination "${IMAGE}:${CI_COMMIT_SHORT_SHA}"'
+
+deploy-dev:
+  stage: deploy-dev
+  image: registry.access.redhat.com/ubi9/ubi:latest
+  rules:
+    - if: '$CI_COMMIT_BRANCH != "main"'
+      changes: [ 'app/frontend/**', '.gitlab-ci.yml' ]
+  script:
+    - 'dnf install -y git >/dev/null'
+    # Write the built tag into THIS branch's dev overlay; your dev app tracks
+    # this branch, so it deploys the new image into your namespace.
+    - 'sed -i -E "s|(newTag:)[[:space:]]*\"[^\"]*\"|\1 \"${CI_COMMIT_SHORT_SHA}\"|" gitops/overlays/dev/kustomization.yaml'
+    - 'git config user.email "${GITLAB_USER_EMAIL}"'
+    - 'git config user.name  "${GITLAB_USER_NAME}"'
+    - 'if [ -n "${GITOPS_PUSH_TOKEN}" ]; then REMOTE="https://oauth2:${GITOPS_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"; else REMOTE="https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"; fi'
+    - 'git remote set-url origin "${REMOTE}"'
+    - 'git add gitops/overlays/dev/kustomization.yaml'
+    - 'git diff --cached --quiet && echo "dev already at ${CI_COMMIT_SHORT_SHA}" && exit 0 || true'
+    - 'git commit -m "dev: deploy frontend ${CI_COMMIT_SHORT_SHA} [skip ci]"'
+    - 'git push origin HEAD:${CI_COMMIT_REF_NAME}'
+
+promote-prod:
+  stage: promote-prod
+  image: registry.access.redhat.com/ubi9/ubi:latest
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes: [ 'app/frontend/**', 'gitops/**' ]
+  script:
+    - 'dnf install -y git >/dev/null'
+    # Promote the tested dev tag (already merged into overlays/dev on main).
+    - 'DEV_TAG=$(grep -E "^[[:space:]]*newTag:" gitops/overlays/dev/kustomization.yaml | tail -1 | sed -E "s/.*\"(.*)\".*/\1/")'
+    - 'echo "Promoting tested frontend tag to prod: ${DEV_TAG}"'
+    - 'test -n "${DEV_TAG}" && [ "${DEV_TAG}" != "initial" ]'
+    - 'sed -i -E "s|(newTag:)[[:space:]]*\"[^\"]*\"|\1 \"${DEV_TAG}\"|" gitops/overlays/prod/kustomization.yaml'
+    - 'git config user.email "${GITLAB_USER_EMAIL}"'
+    - 'git config user.name  "${GITLAB_USER_NAME}"'
+    - 'if [ -n "${GITOPS_PUSH_TOKEN}" ]; then REMOTE="https://oauth2:${GITOPS_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"; else REMOTE="https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"; fi'
+    - 'git remote set-url origin "${REMOTE}"'
+    - 'git add gitops/overlays/prod/kustomization.yaml'
+    - 'git diff --cached --quiet && echo "prod already at ${DEV_TAG}" && exit 0 || true'
+    - 'git commit -m "prod: promote frontend ${DEV_TAG} [skip ci]"'
+    - 'git push origin HEAD:main'

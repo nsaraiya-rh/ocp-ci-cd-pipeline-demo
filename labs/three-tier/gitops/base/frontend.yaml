@@ -1,26 +1,6 @@
-# Frontend tier — nginx serving a ConfigMap-driven page.
-# Namespace-agnostic: no `namespace:` field (ArgoCD applies to the destination
-# namespace), and the Route has no `host:` so OpenShift generates a unique one
-# per namespace. The page text lives in the ConfigMap — that's what lab users
-# edit to see "their" change.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: frontend-content
-  labels:
-    app: frontend
-data:
-  index.html: |
-    <!doctype html>
-    <html>
-      <head><title>Three-Tier Lab</title></head>
-      <body style="font-family: sans-serif; margin: 3rem;">
-        <h1>Three-Tier Lab &mdash; edit me!</h1>
-        <p>Change this text in <code>gitops/base/frontend.yaml</code> on your
-           branch, push, and watch it appear in your dev environment.</p>
-      </body>
-    </html>
----
+# Frontend tier — runs the CI-built image (app/frontend). The image reference
+# `frontend-image` is replaced by the overlays' `images:` (newName = JFrog repo,
+# newTag = the built commit SHA written by CI). Route host auto-generated per namespace.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -41,13 +21,10 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: docker.io/nginxinc/nginx-unprivileged:1.25-alpine   # public; listens on 8080
+          image: frontend-image            # replaced by overlays' images: block
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
-          volumeMounts:
-            - name: content
-              mountPath: /usr/share/nginx/html
-              readOnly: true
           resources:
             requests: { cpu: "50m", memory: "64Mi" }
             limits:   { cpu: "200m", memory: "128Mi" }
@@ -59,10 +36,6 @@ spec:
             httpGet: { path: /, port: 8080 }
             initialDelaySeconds: 15
             periodSeconds: 20
-      volumes:
-        - name: content
-          configMap:
-            name: frontend-content
 ---
 apiVersion: v1
 kind: Service

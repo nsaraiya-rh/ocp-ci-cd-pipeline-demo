@@ -5,19 +5,28 @@ pipeline you've built: **push an app to Git → configure it in GitLab → deplo
 your own dev environment → open an MR → promote to prod.**
 
 The app is the **three-tier web stack** (frontend + api + MySQL + adminer, with
-zero-trust NetworkPolicies), deployed by **Argo CD** — no manual `oc apply`.
+zero-trust NetworkPolicies). The **frontend is built by CI** (GitLab + Kaniko →
+JFrog) and deployed by **Argo CD**; the api / mysql / adminer tiers use public
+images. So this lab covers the **full CI + CD** cycle.
 
 ## The model
 
 - Each user gets **their own dev namespace** and a **long-lived branch**.
-  Pushing to your branch updates *your* dev environment only.
-- Merging your branch to **`main`** (via a reviewed MR) promotes to the **shared
-  prod namespace**.
+- You edit the **frontend source** → **CI builds an image** → the built tag is
+  written to your branch → **Argo CD deploys it to your dev namespace**.
+- Merging your branch to **`main`** (via a reviewed MR) **promotes the tested
+  image** to the **shared prod namespace**.
 
 ```
-you push to  feature/userN   ─► Argo CD (three-tier-dev-userN) ─► namespace three-tier-userN   (your dev)
-                                                                   │ test at your own URL
-open MR  feature/userN → main ─► peer approves ─► merge ─► Argo CD (three-tier-prod) ─► namespace three-tier-prod (shared)
+you edit app/frontend + push feature/userN
+        │
+   CI: Kaniko build ─► JFrog :<sha> ─► deploy-dev writes tag to your branch
+        │
+   Argo CD (three-tier-dev-userN) ─► namespace three-tier-userN   (your dev, test your URL)
+        │
+open MR feature/userN → main ─► approve ─► merge ─► promote-prod copies the tested tag
+        │
+   Argo CD (three-tier-prod) ─► namespace three-tier-prod   (shared prod)
 ```
 
 | | Who | Isolation |
@@ -68,17 +77,21 @@ open MR  feature/userN → main ─► peer approves ─► merge ─► Argo CD
 | **`openssl`** | generate the MySQL passwords in step 0.3 |
 | **GitLab Maintainer/Owner** | create the lab project, set an MR approval rule |
 
-### Cluster prerequisites (instructor confirms once)
+### Cluster / CI prerequisites (instructor confirms once)
 
 - **OpenShift 4.x** with the **OpenShift GitOps (Argo CD) operator** installed.
 - A **default StorageClass** for the MySQL PVC — `oc get storageclass`.
-- Cluster egress to pull images: **`docker.io`** (nginx, node, adminer) and
-  **`registry.redhat.io`** (MySQL), with the cluster's Red Hat pull secret in
-  place (present by default on OpenShift).
+- **A GitLab runner** for the lab project that can build with Kaniko — egress to
+  **`gcr.io`** (Kaniko image), **`registry.access.redhat.com`**, **JFrog**, and GitLab.
+- **JFrog** — a Docker repo the CI can push the frontend image to, plus the CI
+  push token (see Part 0.6).
+- Cluster egress to pull images: **`docker.io`** (node, adminer), **`registry.redhat.io`**
+  (MySQL), and **JFrog** (the built frontend), with the cluster's Red Hat pull
+  secret in place (present by default on OpenShift).
 
-> You do **not** need `kustomize`, `helm`, or `docker` locally — Argo CD renders
-> Kustomize on the cluster, and the lab uses pre-built public images (no image
-> build). You only edit YAML and push with `git`.
+> You do **not** need `kustomize`, `helm`, or `docker` **locally** — CI (Kaniko)
+> builds the frontend image on the runner, and Argo CD renders Kustomize on the
+> cluster. You only edit source/YAML and push with `git`.
 
 ---
 
@@ -156,7 +169,31 @@ oc apply -f argocd/three-tier-dev-appset.yaml    # 6 per-user dev Applications
 oc apply -f argocd/three-tier-prod.yaml          # shared prod Application
 ```
 
-### 0.6 · Confirm
+### 0.6 · Configure CI on the lab project (for the frontend build)
+
+The frontend is built by CI, so the lab GitLab project needs:
+
+1. **CI/CD variables** (Settings → CI/CD → Variables), pointing at your JFrog:
+   | Key | Value |
+   |---|---|
+   | `JFROG_URL` | `globe.jfrog.io` |
+   | `JFROG_REPO` | `ntg-capdv-docker-local` |
+   | `JFROG_USER` | your CI push user |
+   | `JFROG_TOKEN` | your CI push token (masked) |
+
+   > These **must match** the `newName` in `gitops/overlays/{dev,prod}/kustomization.yaml`
+   > (`${JFROG_URL}/${JFROG_REPO}/three-tier-frontend`). Edit the overlays if your
+   > registry path differs.
+
+2. **Allow CI to push** — Settings → CI/CD → Job token permissions → allow the
+   project to push to its own repo (`ci_push_repository_for_job_token_allowed`),
+   so `deploy-dev`/`promote-prod` can commit the tag bump. (Or set a
+   `GITOPS_PUSH_TOKEN` variable — the pipeline uses it if present.)
+
+3. **Runner** — a GitLab runner that can reach **`gcr.io`** (the Kaniko image),
+   `registry.access.redhat.com`, JFrog, and GitLab.
+
+### 0.7 · Confirm
 
 ```bash
 oc get applications -n openshift-gitops | grep three-tier
@@ -164,7 +201,9 @@ oc get applications -n openshift-gitops | grep three-tier
 # three-tier-prod               → Synced/Healthy into three-tier-prod
 ```
 
-Hand each user their **username** (`user1`…`user6`) and the **`LAB_REPO_URL`**.
+The frontend pods start on `:initial` (no build yet) and go green once the first
+build runs. Hand each user their **username** (`user1`…`user6`) and the
+**`LAB_REPO_URL`**.
 
 ---
 
@@ -183,18 +222,20 @@ Look at what's already running for you:
 oc get pods,route -n $NS
 ```
 
-You should see `frontend`, `api`, `mysql-0`, `adminer` pods, and two Routes.
-Open your **frontend** URL:
+You'll see `api`, `mysql-0`, and `adminer` **Running**, and the `frontend` pod in
+**ImagePullBackOff** — that's expected: the frontend image doesn't exist yet
+(tag `:initial`). **You'll build it in Part 2**, and it'll come alive. Your
+frontend Route is already created:
 
 ```bash
 echo "https://$(oc get route frontend -n $NS -o jsonpath='{.spec.host}')"
 ```
 
-It shows the default "Three-Tier Lab — edit me!" page. That page is what you'll change.
+(It won't serve until your first build — that's the point of Part 2.)
 
 ---
 
-# Part 2 — Make a change and deploy it to *your* dev
+# Part 2 — Change the source → CI builds → deploy to *your* dev
 
 Clone the lab repo and switch to **your** branch:
 
@@ -203,11 +244,11 @@ git clone ${LAB_REPO_URL} three-tier-lab && cd three-tier-lab
 git checkout feature/$U
 ```
 
-Edit the page text in **`gitops/base/frontend.yaml`** — change the `<h1>` inside
-the `frontend-content` ConfigMap to include your name, e.g.:
+Edit the frontend **source** — the `<h1>` in **`app/frontend/index.html`** — to
+include your name, e.g.:
 
-```yaml
-<h1>Hello from user1 — my first GitOps deploy!</h1>
+```html
+<h1>Hello from user1 — my first CI/CD build!</h1>
 ```
 
 Commit and push to **your** branch:
@@ -217,16 +258,22 @@ git commit -am "$U: change frontend message"
 git push origin feature/$U
 ```
 
-Now watch Argo CD deploy it to **your** namespace (auto-syncs within ~1–2 min):
+**Watch the CI pipeline** (Build → Pipelines in GitLab, or the CLI): `build-image`
+(Kaniko) builds your frontend image and pushes it to JFrog `:<sha>`; then
+`deploy-dev` writes that tag into `gitops/overlays/dev` on **your** branch and
+pushes a `[skip ci]` commit.
+
+Now **Argo CD** deploys the built image to **your** namespace (~1–2 min):
 
 ```bash
 oc get application three-tier-dev-$U -n openshift-gitops \
   -o jsonpath='sync={.status.sync.status} health={.status.health.status}{"\n"}'
 oc rollout status deploy/frontend -n $NS
+oc get deploy frontend -n $NS -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'   # → …/three-tier-frontend:<sha>
 ```
 
-Reload your frontend URL — **your message is live.** You just did a GitOps
-deploy: Git is the source of truth, Argo CD reconciled your namespace to it.
+Reload your frontend URL — **your message is live**, served by an image *you
+just built*. Full CI + CD: source → CI build → Git → Argo CD → your namespace.
 No one else's environment changed.
 
 ---
@@ -321,7 +368,8 @@ GitOps lab. They're **not** in `gitops/base`; add them deliberately if needed:
 |---|---|---|
 | **EgressFirewall / EgressIP** | Need real CIDRs/egress IPs; cluster-network scope | Set your ranges, add to a prod-only overlay |
 | **DaemonSet (log-agent)** | One pod per node × per namespace, `hostPath`, elevated SCC | Deploy once cluster-wide, not per user |
-| **frontend BuildConfig / ImageStream** | Lab uses the public nginx image (no build) | Point it at a real frontend repo; swap the image |
+| **frontend BuildConfig / ImageStream** | Lab builds the frontend with **Kaniko** (`.gitlab-ci.yml`) instead | Use the OpenShift BuildConfig if you prefer in-cluster S2I builds |
+| **api CI build** | Only the frontend is built; api uses a public stub image | Give `app/api/` a Dockerfile + a build/deploy-dev job like the frontend |
 | **CronJob / migration Job** | DB-dependent stubs, add noise | Include once you have a real api image |
 | **ACS vuln demo** (`09-...`) | Separate from the app — for ACS scanning only | `oc apply -f` it directly when demoing ACS |
 

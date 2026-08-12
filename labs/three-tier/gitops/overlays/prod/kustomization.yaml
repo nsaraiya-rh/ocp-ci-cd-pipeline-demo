@@ -5,3 +5,10 @@ kind: Kustomization
 # the shared `three-tier-prod` namespace when an MR is merged to main.
 resources:
   - ../../base
+
+# Built frontend image. `newTag` is set by the promote-prod CI job (copies the
+# tested dev tag on merge to main) — starts at "initial".
+images:
+  - name: frontend-image
+    newName: globe.jfrog.io/ntg-capdv-docker-local/three-tier-frontend
+    newTag: "initial"
