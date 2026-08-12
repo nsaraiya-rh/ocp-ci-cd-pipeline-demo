@@ -1,6 +1,6 @@
 # AppProject for the three-tier lab. Covers every user dev namespace
 # (three-tier-userN) and the shared prod namespace (three-tier-prod) via one
-# wildcard destination. Replace __LAB_REPO_URL__ with the GitLab lab repo.
+# wildcard destination.
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
@@ -9,7 +9,7 @@ metadata:
 spec:
   description: Three-tier hands-on lab — per-user dev namespaces + shared prod.
   sourceRepos:
-    - '__LAB_REPO_URL__'
+    - 'https://gitlab.com/globetelecom/platforms/ntg-redhat-capability-development-program/Applications/three-tier-lab.git'
   destinations:
     - server: https://kubernetes.default.svc
       namespace: 'three-tier-*'

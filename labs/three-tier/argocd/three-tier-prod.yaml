@@ -2,7 +2,7 @@
 # single three-tier-prod namespace. When a user's MR is merged to main, this
 # auto-syncs — that is the "MR to prod" half of the lab.
 #
-# Replace __LAB_REPO_URL__. Namespace three-tier-prod must exist, labelled
+# Namespace three-tier-prod must exist, labelled
 # argocd.argoproj.io/managed-by=openshift-gitops, with a mysql-credentials Secret.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -12,7 +12,7 @@ metadata:
 spec:
   project: three-tier
   source:
-    repoURL: "__LAB_REPO_URL__"
+    repoURL: "https://gitlab.com/globetelecom/platforms/ntg-redhat-capability-development-program/Applications/three-tier-lab.git"
     targetRevision: main
     path: gitops/overlays/prod
   destination:

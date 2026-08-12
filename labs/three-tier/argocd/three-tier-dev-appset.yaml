@@ -5,7 +5,7 @@
 # Push to your branch  ->  your dev namespace updates. That is the dev half of
 # the lab. Merging your branch to main is what promotes to shared prod.
 #
-# Replace __LAB_REPO_URL__. The namespaces three-tier-userN must already exist,
+# The namespaces three-tier-userN must already exist,
 # labelled argocd.argoproj.io/managed-by=openshift-gitops, each with a
 # mysql-credentials Secret (see the lab guide's instructor setup).
 apiVersion: argoproj.io/v1alpha1
@@ -31,7 +31,7 @@ spec:
     spec:
       project: three-tier
       source:
-        repoURL: "__LAB_REPO_URL__"
+        repoURL: "https://gitlab.com/globetelecom/platforms/ntg-redhat-capability-development-program/Applications/three-tier-lab.git"
         targetRevision: "feature/{{.user}}"          # each user's long-lived branch
         path: gitops/overlays/dev
       destination:
