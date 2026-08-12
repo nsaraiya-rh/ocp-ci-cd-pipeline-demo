@@ -176,17 +176,24 @@ oc apply -f argocd/three-tier-prod.yaml          # shared prod Application
 
 The frontend is built by CI, so the lab GitLab project needs:
 
-1. **CI/CD variables** (Settings → CI/CD → Variables), pointing at your JFrog:
-   | Key | Value |
-   |---|---|
-   | `JFROG_URL` | `globe.jfrog.io` |
-   | `JFROG_REPO` | `ntg-capdv-docker-local` |
-   | `JFROG_USER` | your CI push user |
-   | `JFROG_TOKEN` | your CI push token (masked) |
+1. **CI/CD variables** (Settings → CI/CD → Variables):
+   | Key | Value | Masked | When |
+   |---|---|---|---|
+   | `JFROG_URL` | `globe.jfrog.io` | no | always |
+   | `JFROG_REPO` | `ntg-capdv-docker-local` | no | always |
+   | `JFROG_USER` | your CI push user | no | always |
+   | `JFROG_TOKEN` | your CI push token | **yes** | always |
+   | `GITOPS_PUSH_TOKEN` | Project Access Token, `write_repository` (step 2b) | **yes** | strict `main` |
+   | `GIT_BOT_EMAIL` | the bot's `project_<id>_bot_<hash>@noreply.gitlab.com` | no | strict `main` + verified-committer rule |
 
-   > These **must match** the `newName` in `gitops/overlays/{dev,prod}/kustomization.yaml`
-   > (`${JFROG_URL}/${JFROG_REPO}/three-tier-frontend`). Edit the overlays if your
-   > registry path differs.
+   > `JFROG_URL`/`JFROG_REPO` **must match** the `newName` in
+   > `gitops/overlays/{dev,prod}/kustomization.yaml`
+   > (`${JFROG_URL}/${JFROG_REPO}/three-tier-frontend`).
+   >
+   > **GitLab enforcing "reject unverified users"?** Then `GIT_BOT_EMAIL` is
+   > **required** with `GITOPS_PUSH_TOKEN` (the bot's commit must carry a verified
+   > email). Find the bot's username under **Project → Members** and append
+   > `@noreply.gitlab.com`.
 
 2. **Push-back — pick one:**
 
