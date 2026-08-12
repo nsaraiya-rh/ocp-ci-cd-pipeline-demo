@@ -1,5 +1,5 @@
 # Per-user DEV environments. A list generator creates one Application per lab
-# user; each tracks that user's long-lived branch (lab/userN) and deploys the
+# user; each tracks that user's long-lived branch (feature/userN) and deploys the
 # dev overlay into that user's own namespace (three-tier-userN).
 #
 # Push to your branch  ->  your dev namespace updates. That is the dev half of
@@ -32,7 +32,7 @@ spec:
       project: three-tier
       source:
         repoURL: "__LAB_REPO_URL__"
-        targetRevision: "lab/{{.user}}"          # each user's long-lived branch
+        targetRevision: "feature/{{.user}}"          # each user's long-lived branch
         path: gitops/overlays/dev
       destination:
         server: https://kubernetes.default.svc

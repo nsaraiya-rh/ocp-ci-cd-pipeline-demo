@@ -15,9 +15,9 @@ zero-trust NetworkPolicies), deployed by **Argo CD** — no manual `oc apply`.
   prod namespace**.
 
 ```
-you push to  lab/userN   ─► Argo CD (three-tier-dev-userN) ─► namespace three-tier-userN   (your dev)
+you push to  feature/userN   ─► Argo CD (three-tier-dev-userN) ─► namespace three-tier-userN   (your dev)
                                                                    │ test at your own URL
-open MR  lab/userN → main ─► peer approves ─► merge ─► Argo CD (three-tier-prod) ─► namespace three-tier-prod (shared)
+open MR  feature/userN → main ─► peer approves ─► merge ─► Argo CD (three-tier-prod) ─► namespace three-tier-prod (shared)
 ```
 
 | | Who | Isolation |
@@ -129,13 +129,20 @@ done
 
 ### 0.4 · Create the 6 user branches
 
-Each user's dev Application tracks a long-lived branch:
+Each user's dev Application tracks a long-lived branch. Names follow the same
+branch convention as the sample-app pipeline
+(`^(feature|feat|fix|hotfix|bugfix|chore)[/-].*`), so `feature/userN` conforms:
 
 ```bash
 for u in user1 user2 user3 user4 user5 user6; do
-  git push origin main:refs/heads/lab/$u
+  git push origin main:refs/heads/feature/$u
 done
 ```
+
+> The three-tier lab uses a **list generator** (per-user namespace), so the
+> `branchMatch` regex isn't applied as a filter here — the branch *names* just
+> follow the convention for consistency. (The sample-app preview pipeline is the
+> one that actually enforces `branchMatch` via its SCM branch generator.)
 
 ### 0.5 · Wire Argo CD
 
@@ -193,7 +200,7 @@ Clone the lab repo and switch to **your** branch:
 
 ```bash
 git clone ${LAB_REPO_URL} three-tier-lab && cd three-tier-lab
-git checkout lab/$U
+git checkout feature/$U
 ```
 
 Edit the page text in **`gitops/base/frontend.yaml`** — change the `<h1>` inside
@@ -207,7 +214,7 @@ Commit and push to **your** branch:
 
 ```bash
 git commit -am "$U: change frontend message"
-git push origin lab/$U
+git push origin feature/$U
 ```
 
 Now watch Argo CD deploy it to **your** namespace (auto-syncs within ~1–2 min):
@@ -226,9 +233,9 @@ No one else's environment changed.
 
 # Part 3 — Open a Merge Request (promote toward prod)
 
-In GitLab, open an MR from **`lab/$U` → `main`**:
+In GitLab, open an MR from **`feature/$U` → `main`**:
 
-- **Merge requests → New merge request**, source `lab/userN`, target `main`, Create.
+- **Merge requests → New merge request**, source `feature/userN`, target `main`, Create.
 - Assign a **peer** as reviewer.
 
 Your reviewer opens the MR, looks at the diff (your ConfigMap change), and
@@ -239,7 +246,7 @@ Your reviewer opens the MR, looks at the diff (your ConfigMap change), and
 > rebase your branch on the latest `main` and resolve it (a real-world skill):
 > ```bash
 > git fetch origin && git rebase origin/main   # resolve conflicts, then:
-> git push -f origin lab/$U
+> git push -f origin feature/$U
 > ```
 
 ---
@@ -292,7 +299,7 @@ oc get hpa api-hpa -n $NS
 
 Delete your branch when done (this does not touch prod):
 ```bash
-git push origin --delete lab/$U
+git push origin --delete feature/$U
 ```
 Instructor teardown:
 ```bash
@@ -327,4 +334,4 @@ GitOps lab. They're **not** in `gitops/base`; add them deliberately if needed:
 | `mysql-0` Pending | No default StorageClass — set `storageClassName` in `mysql.yaml` (0.2) |
 | Argo can't deploy to a namespace (`forbidden`) | Namespace missing the `argocd.argoproj.io/managed-by=openshift-gitops` label (0.3) |
 | Frontend route 503 | frontend pod not Ready yet, or the `allow-router-to-frontend` NetworkPolicy didn't apply — `oc get netpol -n $NS` |
-| Your change didn't appear in dev | Confirm you pushed to `lab/$U` (not `main`), and the dev app targetRevision is `lab/$U` |
+| Your change didn't appear in dev | Confirm you pushed to `feature/$U` (not `main`), and the dev app targetRevision is `feature/$U` |
