@@ -1,0 +1,19 @@
+# AppProject for the three-tier lab. Covers every user dev namespace
+# (three-tier-userN) and the shared prod namespace (three-tier-prod) via one
+# wildcard destination. Replace __LAB_REPO_URL__ with the GitLab lab repo.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: three-tier
+  namespace: openshift-gitops
+spec:
+  description: Three-tier hands-on lab — per-user dev namespaces + shared prod.
+  sourceRepos:
+    - '__LAB_REPO_URL__'
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: 'three-tier-*'
+  clusterResourceWhitelist: []          # app is fully namespaced
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'

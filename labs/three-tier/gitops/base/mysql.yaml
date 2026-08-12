@@ -1,0 +1,73 @@
+# Data tier — MySQL StatefulSet + headless Service.
+# Namespace-agnostic. storageClassName is omitted so the cluster's DEFAULT
+# StorageClass is used (portable); set one explicitly if you have no default.
+# The `mysql-credentials` Secret is created out-of-band per namespace (see the
+# lab guide) — it is NOT committed to git.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  labels:
+    app: mysql
+spec:
+  clusterIP: None            # headless — StatefulSet pod DNS identity
+  selector:
+    app: mysql
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+  labels:
+    app: mysql
+    tier: data
+spec:
+  serviceName: mysql
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+        tier: data
+    spec:
+      containers:
+        - name: mysql
+          image: registry.redhat.io/rhel8/mysql-80:latest   # pulled via the cluster's Red Hat pull secret
+          ports:
+            - containerPort: 3306
+          env:
+            - name: MYSQL_DATABASE
+              valueFrom: { secretKeyRef: { name: mysql-credentials, key: database } }
+            - name: MYSQL_USER
+              valueFrom: { secretKeyRef: { name: mysql-credentials, key: username } }
+            - name: MYSQL_PASSWORD
+              valueFrom: { secretKeyRef: { name: mysql-credentials, key: password } }
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom: { secretKeyRef: { name: mysql-credentials, key: root-password } }
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql/data
+          resources:
+            requests: { cpu: "150m", memory: "384Mi" }
+            limits:   { cpu: "500m", memory: "768Mi" }
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "mysqladmin ping -h 127.0.0.1 -u root -p$MYSQL_ROOT_PASSWORD"]
+            initialDelaySeconds: 20
+            periodSeconds: 15
+  volumeClaimTemplates:
+    - metadata:
+        name: mysql-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # storageClassName: <your-storageclass>   # omit = cluster default
+        resources:
+          requests:
+            storage: 2Gi

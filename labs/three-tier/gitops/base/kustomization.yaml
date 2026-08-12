@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Full three-tier app (namespace-portable). Deployed as-is into each user's dev
+# namespace and the shared prod namespace via ArgoCD (destination namespace set
+# by the Application, not here). The mysql-credentials Secret is created
+# out-of-band per namespace — see labs/three-tier/LAB-GUIDE.md.
+#
+# Intentionally omitted for the lab (cluster-infra / not per-user GitOps):
+#   EgressFirewall/EgressIP, DaemonSet (hostPath), frontend BuildConfig/ImageStream,
+#   the ACS vuln demo, and the one-off migration Job. See the guide's appendix.
+resources:
+  - frontend.yaml
+  - api.yaml
+  - mysql.yaml
+  - adminer.yaml
+  - network-policies.yaml

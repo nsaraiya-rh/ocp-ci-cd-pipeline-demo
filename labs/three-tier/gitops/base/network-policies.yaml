@@ -1,0 +1,63 @@
+# Zero-trust NetworkPolicies (namespace-scoped; portable as-is).
+# deny-all ingress, then explicit allows: router→frontend, frontend→api,
+# api/adminer→mysql, router→adminer. Kubelet health probes are not affected.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-all-ingress
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-router-to-frontend
+spec:
+  podSelector: { matchLabels: { app: frontend } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-to-api
+spec:
+  podSelector: { matchLabels: { app: api } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: frontend } }
+      ports:
+        - { protocol: TCP, port: 3000 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-and-adminer-to-mysql
+spec:
+  podSelector: { matchLabels: { app: mysql } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: api } }
+        - podSelector: { matchLabels: { app: adminer } }
+      ports:
+        - { protocol: TCP, port: 3306 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-router-to-adminer
+spec:
+  podSelector: { matchLabels: { app: adminer } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: ingress

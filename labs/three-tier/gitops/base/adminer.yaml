@@ -1,0 +1,68 @@
+# DB browser — Adminer. ADMINER_DEFAULT_SERVER uses the short name `mysql`
+# so it points at the in-namespace DB. Route host auto-generated per namespace.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adminer
+  labels:
+    app: adminer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: adminer
+  template:
+    metadata:
+      labels:
+        app: adminer
+    spec:
+      containers:
+        - name: adminer
+          image: docker.io/library/adminer:4.8.1-standalone   # public
+          ports:
+            - containerPort: 8080
+          env:
+            - name: ADMINER_DEFAULT_SERVER
+              value: "mysql"
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits:   { cpu: "200m", memory: "128Mi" }
+          readinessProbe:
+            httpGet: { path: /, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /, port: 8080 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adminer
+  labels:
+    app: adminer
+spec:
+  type: ClusterIP
+  selector:
+    app: adminer
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: adminer
+  labels:
+    app: adminer
+spec:
+  to:
+    kind: Service
+    name: adminer
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
