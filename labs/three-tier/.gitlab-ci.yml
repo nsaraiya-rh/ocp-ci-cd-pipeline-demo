@@ -56,8 +56,11 @@ deploy-dev:
     # Write the built tag into THIS branch's dev overlay; your dev app tracks
     # this branch, so it deploys the new image into your namespace.
     - 'sed -i -E "s|(newTag:)[[:space:]]*\"[^\"]*\"|\1 \"${CI_COMMIT_SHORT_SHA}\"|" gitops/overlays/dev/kustomization.yaml'
-    - 'git config user.email "${GITLAB_USER_EMAIL}"'
-    - 'git config user.name  "${GITLAB_USER_NAME}"'
+    # When pushing as the GITOPS_PUSH_TOKEN bot under a "verified committer" push
+    # rule, the committer must be the bot's email — set GIT_BOT_EMAIL to it.
+    # Otherwise falls back to the triggering user (correct for CI_JOB_TOKEN pushes).
+    - 'git config user.email "${GIT_BOT_EMAIL:-$GITLAB_USER_EMAIL}"'
+    - 'git config user.name  "${GIT_BOT_NAME:-$GITLAB_USER_NAME}"'
     - 'if [ -n "${GITOPS_PUSH_TOKEN}" ]; then REMOTE="https://oauth2:${GITOPS_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"; else REMOTE="https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"; fi'
     - 'git remote set-url origin "${REMOTE}"'
     - 'git add gitops/overlays/dev/kustomization.yaml'
@@ -78,8 +81,11 @@ promote-prod:
     - 'echo "Promoting tested frontend tag to prod: ${DEV_TAG}"'
     - 'test -n "${DEV_TAG}" && [ "${DEV_TAG}" != "initial" ]'
     - 'sed -i -E "s|(newTag:)[[:space:]]*\"[^\"]*\"|\1 \"${DEV_TAG}\"|" gitops/overlays/prod/kustomization.yaml'
-    - 'git config user.email "${GITLAB_USER_EMAIL}"'
-    - 'git config user.name  "${GITLAB_USER_NAME}"'
+    # When pushing as the GITOPS_PUSH_TOKEN bot under a "verified committer" push
+    # rule, the committer must be the bot's email — set GIT_BOT_EMAIL to it.
+    # Otherwise falls back to the triggering user (correct for CI_JOB_TOKEN pushes).
+    - 'git config user.email "${GIT_BOT_EMAIL:-$GITLAB_USER_EMAIL}"'
+    - 'git config user.name  "${GIT_BOT_NAME:-$GITLAB_USER_NAME}"'
     - 'if [ -n "${GITOPS_PUSH_TOKEN}" ]; then REMOTE="https://oauth2:${GITOPS_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"; else REMOTE="https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"; fi'
     - 'git remote set-url origin "${REMOTE}"'
     - 'git add gitops/overlays/prod/kustomization.yaml'

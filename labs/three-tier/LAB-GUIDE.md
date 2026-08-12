@@ -188,10 +188,24 @@ The frontend is built by CI, so the lab GitLab project needs:
    > (`${JFROG_URL}/${JFROG_REPO}/three-tier-frontend`). Edit the overlays if your
    > registry path differs.
 
-2. **Allow CI to push** — Settings → CI/CD → Job token permissions → allow the
-   project to push to its own repo (`ci_push_repository_for_job_token_allowed`),
-   so `deploy-dev`/`promote-prod` can commit the tag bump. (Or set a
-   `GITOPS_PUSH_TOKEN` variable — the pipeline uses it if present.)
+2. **Push-back — pick one:**
+
+   **(a) Simple — `CI_JOB_TOKEN`:** Settings → CI/CD → Job token permissions →
+   check **"Allow Git push requests to the repository"**. `deploy-dev`/`promote-prod`
+   then push as the triggering user. (Whoever merges to `main` must have push
+   rights on `main` — easiest if the instructor merges.)
+
+   **(b) Strict — `GITOPS_PUSH_TOKEN` bot (MR-only `main`):**
+   - Create a **Project Access Token** (Settings → Access Tokens): role
+     **Maintainer**, scope **`write_repository`**; copy the value (shown once).
+   - Add it as a masked CI variable **`GITOPS_PUSH_TOKEN`**.
+   - **Protected branches → `main`** → *Allowed to push and merge* → add the
+     token's **bot user** (`project_<id>_bot_…`); set humans to *No one* (push),
+     *Maintainers* (merge).
+   - **If your GitLab enforces "reject unverified users"** (committer email must
+     be verified): the bot push fails unless the committer is the bot's email.
+     Set CI variable **`GIT_BOT_EMAIL`** = the bot's `@noreply` email (from
+     Project → Members) — the pipeline uses it when set.
 
 3. **Runner** — a GitLab runner that can reach **`gcr.io`** (the Kaniko image),
    `registry.access.redhat.com`, JFrog, and GitLab.
