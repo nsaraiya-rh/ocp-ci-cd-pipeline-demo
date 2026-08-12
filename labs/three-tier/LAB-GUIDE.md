@@ -27,6 +27,61 @@ open MR  lab/userN → main ─► peer approves ─► merge ─► Argo CD (th
 
 ---
 
+## Prerequisites — tools & access
+
+### On your workstation (every user)
+
+| Tool | Why | Check |
+|---|---|---|
+| **`oc`** (OpenShift CLI) | inspect your namespace, rollout status, exec, get routes | `oc version` |
+| **`git`** | clone, branch, commit, push | `git --version` |
+| **A web browser** | open your app/Adminer URLs; use GitLab (open + approve MRs) | — |
+
+> `oc` version should match the cluster's major.minor (4.x). Download it from the
+> OpenShift web console (**?** menu → *Command line tools*).
+
+### Access & accounts (every user)
+
+- **OpenShift login** — you must be logged in to the cluster with rights in your
+  namespace (`three-tier-userN`). Get a login command from the web console
+  (top-right → *Copy login command*) and run it:
+  ```bash
+  oc login --token=sha256~... --server=https://api.<cluster>:6443
+  oc whoami          # confirm you're logged in
+  ```
+- **GitLab account** with **Developer** access to the lab project (push branches,
+  open MRs). At least one reviewer per pair needs **rights to approve** MRs.
+- **Git push credentials for GitLab** — either an **SSH key** added to your GitLab
+  account, or an **HTTPS Personal Access Token** (`write_repository`). Test:
+  ```bash
+  git ls-remote <LAB_REPO_URL>     # should list refs, not prompt-fail
+  ```
+- **Network reachability** — your workstation needs to reach the cluster API
+  (`:6443`), the app Routes (`:443`), and GitLab (`:443`/`:22`).
+
+### Instructor also needs (for Part 0)
+
+| Tool | Why |
+|---|---|
+| **`oc`** with rights to create namespaces + apply in `openshift-gitops` | create the 6 + 1 namespaces, labels, secrets; apply the Argo CD manifests |
+| **`git`** | seed the lab GitLab repo, create the user branches |
+| **`openssl`** | generate the MySQL passwords in step 0.3 |
+| **GitLab Maintainer/Owner** | create the lab project, set an MR approval rule |
+
+### Cluster prerequisites (instructor confirms once)
+
+- **OpenShift 4.x** with the **OpenShift GitOps (Argo CD) operator** installed.
+- A **default StorageClass** for the MySQL PVC — `oc get storageclass`.
+- Cluster egress to pull images: **`docker.io`** (nginx, node, adminer) and
+  **`registry.redhat.io`** (MySQL), with the cluster's Red Hat pull secret in
+  place (present by default on OpenShift).
+
+> You do **not** need `kustomize`, `helm`, or `docker` locally — Argo CD renders
+> Kustomize on the cluster, and the lab uses pre-built public images (no image
+> build). You only edit YAML and push with `git`.
+
+---
+
 # Part 0 — Instructor setup (one-time)
 
 > Do this **once** before the session. Users start at Part 1.
