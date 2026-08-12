@@ -106,12 +106,15 @@ Create an empty GitLab project (e.g. `platform/three-tier-lab`) and push the
 `gitops/`, `argocd/`, and this guide:
 
 ```bash
-git clone https://gitlab.com/<group>/three-tier-lab.git && cd three-tier-lab
+export LAB_REPO_URL="https://gitlab.com/globetelecom/platforms/ntg-redhat-capability-development-program/Applications/three-tier-lab.git"
+
+git clone ${LAB_REPO_URL} && cd three-tier-lab
 cp -r <this-repo>/labs/three-tier/. .
 git add -A && git commit -m "seed: three-tier lab" && git push -u origin main
 ```
 
-Note the repo URL — call it **`LAB_REPO_URL`** below.
+The Argo manifests in `argocd/` are **already pre-filled** with this repo URL,
+so step 0.5's `sed` is a no-op — apply them as-is.
 
 ### 0.2 · Check the cluster has a default StorageClass
 
@@ -214,6 +217,7 @@ Set your identity once per shell:
 ```bash
 export U=user1                 # ← YOUR username
 export NS=three-tier-$U        # your dev namespace
+export LAB_REPO_URL="https://gitlab.com/globetelecom/platforms/ntg-redhat-capability-development-program/Applications/three-tier-lab.git"
 ```
 
 Look at what's already running for you:
