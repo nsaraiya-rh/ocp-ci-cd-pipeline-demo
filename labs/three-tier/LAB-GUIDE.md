@@ -162,15 +162,19 @@ done
 
 ### 0.5 · Wire Argo CD
 
-Set the repo URL in the three Argo manifests, then apply them:
+The manifests in `argocd/` are **pre-filled with the repo URL**, so just apply
+them — **project first**:
 
 ```bash
-sed -i "s|__LAB_REPO_URL__|${LAB_REPO_URL}|g" argocd/*.yaml
-
 oc apply -f argocd/three-tier-project.yaml       # AppProject (project first)
 oc apply -f argocd/three-tier-dev-appset.yaml    # 6 per-user dev Applications
 oc apply -f argocd/three-tier-prod.yaml          # shared prod Application
 ```
+
+> Seeded an older copy that still has `__LAB_REPO_URL__`? Replace it first.
+> On **macOS** use the empty backup arg (`-i ''`):
+> `sed -i '' "s|__LAB_REPO_URL__|${LAB_REPO_URL}|g" argocd/*.yaml`
+> (Linux/GNU sed: drop the `''`.)
 
 ### 0.6 · Configure CI on the lab project (for the frontend build)
 
