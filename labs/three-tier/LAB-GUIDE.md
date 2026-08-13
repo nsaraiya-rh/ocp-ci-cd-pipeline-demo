@@ -168,9 +168,9 @@ done
 > Verify: `oc get sa default -n three-tier-user1 -o jsonpath='{.imagePullSecrets}'`
 > should list `jfrog-pull`.
 
-### 0.4 · Create the 6 user branches
+### 0.4 · Create + protect the 6 user branches
 
-Each user's dev Application tracks a long-lived branch. Names follow the same
+Each user's dev Application tracks a **long-lived** branch. Names follow the same
 branch convention as the sample-app pipeline
 (`^(feature|feat|fix|hotfix|bugfix|chore)[/-].*`), so `feature/userN` conforms:
 
@@ -184,6 +184,25 @@ done
 > `branchMatch` regex isn't applied as a filter here — the branch *names* just
 > follow the convention for consistency. (The sample-app preview pipeline is the
 > one that actually enforces `branchMatch` via its SCM branch generator.)
+
+**Protect them so an MR merge can't delete them** (the critical guardrail — a
+deleted branch breaks that user's dev Application and, when recreated, resets the
+dev overlay tag back to `initial`). Two settings:
+
+1. **Settings → Repository → Branch rules → Add** a rule for `feature/*`:
+   - **Allowed to push and merge:** *Developers + Maintainers* (users push to
+     their branch; the `deploy-dev` bot, a Maintainer, pushes the tag back).
+   - **Allowed to force push:** **ON** (users rebase on `main` to resolve prod
+     conflicts — Part 3).
+   - GitLab **refuses to delete a protected branch**, so "Delete source branch"
+     on merge becomes a no-op for `feature/*`.
+2. **Settings → Merge requests →** uncheck **"Enable 'Delete source branch'
+   option by default"**, so the box starts **unchecked** for every MR.
+
+> All CI/CD variables in this lab are **unprotected** (0.7), so protecting the
+> `feature/*` branches does **not** change variable exposure. If you later mark a
+> variable Protected, note it would then also be exposed on the protected
+> `feature/*` branches.
 
 ### 0.5 · Register the repo credential in Argo CD
 
@@ -444,12 +463,12 @@ is the quality gate — it does not deploy anything yet.)
 
 When it's your turn, **Merge** the MR (as a merge commit).
 
-> ⚠️ **UNCHECK "Delete source branch" before merging.** Your `feature/$U` branch
-> is **long-lived** — Argo CD's dev Application tracks it. If the merge deletes it,
-> your dev app loses its branch and stops syncing; recreating it from `main`
-> brings back `newTag: "initial"` (main's dev overlay is never promoted), so the
-> frontend falls back to `ImagePullBackOff` and `promote-prod` aborts with
-> `Promoting … initial`. Keep the branch.
+> ⚠️ **Keep `feature/$U` — do not delete it on merge.** It's **long-lived**;
+> Argo CD's dev Application tracks it. If it's protected (instructor step 0.4),
+> GitLab **won't** delete it and the checkbox is a no-op — good. If it isn't,
+> **uncheck "Delete source branch"** yourself. A deleted branch stops your dev
+> app and, when recreated, resets the dev overlay tag to `initial` →
+> `ImagePullBackOff` and `promote-prod` aborts with `Promoting … initial`.
 
 Merging puts your change on `main`, which carries your tested dev tag into `main`;
 `promote-prod` then copies that tag into the prod overlay, and the
