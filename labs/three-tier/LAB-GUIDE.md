@@ -244,7 +244,7 @@ The frontend is built by CI, so the lab GitLab project needs:
    | `JFROG_TOKEN` | your CI push token | **off** | **on** | build (feature) |
    | `GITOPS_PUSH_TOKEN` | Project Access Token, `write_repository` (step 2b) | **off** | **on** | deploy-dev (feature) + promote-prod (main) |
    | `GIT_BOT_EMAIL` | the bot's `project_<id>_bot_<hash>@noreply.gitlab.com` | **off** | off | deploy-dev (feature) + promote-prod (main) |
-   | `GIT_BOT_NAME` | the bot user's account **name** (display name) | **off** | off | deploy-dev (feature) + promote-prod (main) |
+   | `GIT_BOT_NAME` | the bot's **display name** = the token's name (e.g. `GITOPS_PUSH_TOKEN`), not the `project_<id>_bot_…` username | **off** | off | deploy-dev (feature) + promote-prod (main) |
 
    > **ALL of these MUST have "Protect variable" OFF.** `build` **and**
    > `deploy-dev` run on unprotected **`feature/userN`** branches (only
@@ -271,10 +271,12 @@ The frontend is built by CI, so the lab GitLab project needs:
    >
    > **GitLab enforcing "commit author name consistent with GitLab account"?**
    > Then `GIT_BOT_NAME` is **required** — the commit author name must equal the
-   > **bot account's name**, since the push authenticates as the bot. Get it from
-   > the bot member's `name` field (`.../members/all`); if the rule compares the
-   > username instead, use `project_<id>_bot_<hash>`. Symptom when unset:
-   > `Your git author name is inconsistent with GitLab account name`
+   > bot account's **display name**. For a Project Access Token bot the display
+   > name is **the token's name** (what you typed when creating it), *not* the
+   > `project_<id>_bot_<hash>` username. Check **Manage → Members**: the bold
+   > Account name next to the `Bot` badge is the value to use (e.g. a token named
+   > `GITOPS_PUSH_TOKEN` → set `GIT_BOT_NAME=GITOPS_PUSH_TOKEN`). Symptom when
+   > wrong/unset: `Your git author name is inconsistent with GitLab account name`
    > (`pre-receive hook declined`).
 
 2. **Push-back — pick one:**
