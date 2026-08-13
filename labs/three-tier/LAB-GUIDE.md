@@ -238,23 +238,26 @@ The frontend is built by CI, so the lab GitLab project needs:
 1. **CI/CD variables** (Settings → CI/CD → Variables):
    | Key | Value | Protect | Mask | Used by |
    |---|---|---|---|---|
-   | `JFROG_URL` | `globe.jfrog.io` | **off** | off | build (feature branches) |
-   | `JFROG_REPO` | `ntg-capdv-docker-local` | **off** | off | build (feature branches) |
-   | `JFROG_USER` | your CI push user | **off** | off | build (feature branches) |
-   | `JFROG_TOKEN` | your CI push token | **off** | **on** | build (feature branches) |
-   | `GITOPS_PUSH_TOKEN` | Project Access Token, `write_repository` (step 2b) | on | **on** | `promote-prod` (`main`) |
-   | `GIT_BOT_EMAIL` | the bot's `project_<id>_bot_<hash>@noreply.gitlab.com` | on | off | `promote-prod` (`main`) |
+   | `JFROG_URL` | `globe.jfrog.io` | **off** | off | build (feature) |
+   | `JFROG_REPO` | `ntg-capdv-docker-local` | **off** | off | build (feature) |
+   | `JFROG_USER` | your CI push user | **off** | off | build (feature) |
+   | `JFROG_TOKEN` | your CI push token | **off** | **on** | build (feature) |
+   | `GITOPS_PUSH_TOKEN` | Project Access Token, `write_repository` (step 2b) | **off** | **on** | deploy-dev (feature) + promote-prod (main) |
+   | `GIT_BOT_EMAIL` | the bot's `project_<id>_bot_<hash>@noreply.gitlab.com` | **off** | off | deploy-dev (feature) + promote-prod (main) |
 
-   > **The four `JFROG_*` vars MUST have "Protect variable" OFF.** The build runs
-   > on **`feature/userN`** branches, which are **not protected** — GitLab only
-   > injects *protected* variables into jobs on protected branches. If they're
-   > protected, they arrive **empty**, and the build tries
-   > `Building //three-tier-frontend…` → pushes to `index.docker.io` →
-   > `Invalid auth configuration file`. Masking is fine (it only hides the value
-   > in logs); it's *Protect* that gates by branch.
+   > **ALL of these MUST have "Protect variable" OFF.** `build` **and**
+   > `deploy-dev` run on unprotected **`feature/userN`** branches (only
+   > `promote-prod` runs on `main`), and GitLab only injects *protected* variables
+   > into protected-branch jobs. A protected var arrives **empty** on a feature
+   > branch:
+   > - empty `JFROG_*` → `Building //three-tier-frontend…` → `index.docker.io` →
+   >   `Invalid auth configuration file`.
+   > - empty `GITOPS_PUSH_TOKEN` → `deploy-dev` falls back to `CI_JOB_TOKEN` and
+   >   the push gets **`403 You are not allowed to push code`**.
    >
-   > `GITOPS_PUSH_TOKEN`/`GIT_BOT_EMAIL` may stay **protected** — they're only
-   > used by `promote-prod`, which runs on `main` (protected).
+   > Masking is fine (it only hides the value in logs); it's *Protect* that gates
+   > by branch. Humans are kept off `main` by the **protected-branch push
+   > allow-list** (bot only), not by the variable's protected flag.
    >
    > `JFROG_URL`/`JFROG_REPO` **must match** the `newName` in
    > `gitops/overlays/{dev,prod}/kustomization.yaml`
@@ -502,6 +505,7 @@ GitOps lab. They're **not** in `gitops/base`; add them deliberately if needed:
 | Dev app `Unknown` / `ComparisonError: … HTTP Basic: Access denied` | Argo can't read the private repo — add the repo credential Secret (0.5), then hard-refresh the apps |
 | Dev app `ComparisonError: … project three-tier-lab does not exist` | Apply `three-tier-project.yaml` first |
 | Build log `Building //three-tier-frontend…` / `Invalid auth configuration file` | `JFROG_*` vars are **empty** — they have "Protect variable" ON but the build runs on an unprotected `feature/*` branch. Turn **Protect OFF** on the four `JFROG_*` vars (0.7) |
+| `deploy-dev` push `403 You are not allowed to push code` | `GITOPS_PUSH_TOKEN` is **empty** on the feature branch (Protect ON) so it fell back to `CI_JOB_TOKEN`. Turn **Protect OFF** on `GITOPS_PUSH_TOKEN` + `GIT_BOT_EMAIL`, and confirm the bot user is a project member (0.7) |
 | Frontend `ImagePullBackOff: … Authentication is required` | `jfrog-pull` secret missing / not linked to the `default` SA in that namespace — re-run 0.3 |
 | Push fails `src refspec feature/userN does not match any` | You're on `main`, not your branch — `git fetch origin && git checkout feature/$U`; also check `echo "U=[$U]"` |
 | Pods `CreateContainerConfigError` on secret | `mysql-credentials` missing in that namespace — re-run 0.3 for it |
