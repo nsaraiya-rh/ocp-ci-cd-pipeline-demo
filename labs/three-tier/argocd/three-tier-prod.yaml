@@ -18,6 +18,12 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: three-tier-prod
+  # The api HPA owns spec/replicas — ignore it so prod doesn't sit OutOfSync.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
   syncPolicy:
     automated:
       prune: true

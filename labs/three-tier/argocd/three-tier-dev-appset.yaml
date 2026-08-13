@@ -37,6 +37,13 @@ spec:
       destination:
         server: https://kubernetes.default.svc
         namespace: "three-tier-{{.user}}"        # each user's own namespace
+      # The api HPA owns spec/replicas; without this the app is perpetually
+      # OutOfSync (Git says N, the HPA sets another value) and selfHeal fights it.
+      ignoreDifferences:
+        - group: apps
+          kind: Deployment
+          jsonPointers:
+            - /spec/replicas
       syncPolicy:
         automated:
           prune: true

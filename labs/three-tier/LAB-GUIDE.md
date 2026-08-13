@@ -574,3 +574,4 @@ GitOps lab. They're **not** in `gitops/base`; add them deliberately if needed:
 | Argo can't deploy to a namespace (`forbidden`) | Namespace missing the `argocd.argoproj.io/managed-by=openshift-gitops` label (0.3) |
 | Frontend route 503 | frontend pod not Ready yet, or the `allow-router-to-frontend` NetworkPolicy didn't apply — `oc get netpol -n $NS` |
 | Your change didn't appear in dev | Confirm you pushed to `feature/$U` (not `main`), and the dev app targetRevision is `feature/$U` |
+| App stays **Healthy but OutOfSync** (never settles) | The api **HPA** owns `spec/replicas` while Git also sets it → perpetual diff. The Applications carry `ignoreDifferences` on Deployment `/spec/replicas` for this; if you see it, re-apply the updated `argocd/three-tier-dev-appset.yaml` + `three-tier-prod.yaml` |
