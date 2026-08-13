@@ -125,23 +125,48 @@ oc get storageclass          # one should be marked (default)
 ```
 If none is default, set `storageClassName:` in `gitops/base/mysql.yaml` to a real class.
 
-### 0.3 · Create the 6 dev namespaces + the prod namespace (label + DB secret)
+### 0.3 · Create the 6 dev namespaces + the prod namespace (label + secrets)
+
+Set the JFrog **pull** credentials first (a user/token with **read** on
+`ntg-capdv-docker-local` — paste in the terminal, not into any file):
+
+```bash
+export JFROG_PULL_USER='<jfrog-user>'
+export JFROG_PULL_TOKEN='<jfrog-token>'   # API key / token, not the UI password
+```
 
 ```bash
 for u in user1 user2 user3 user4 user5 user6 prod; do
   ns="three-tier-$u"
   oc create namespace "$ns" 2>/dev/null || true
   oc label namespace "$ns" argocd.argoproj.io/managed-by=openshift-gitops --overwrite
+
+  # DB credentials (consumed by mysql/api)
   oc create secret generic mysql-credentials -n "$ns" \
     --from-literal=database=appdb \
     --from-literal=username=appuser \
     --from-literal=password="$(openssl rand -hex 12)" \
     --from-literal=root-password="$(openssl rand -hex 16)" 2>/dev/null || true
+
+  # JFrog pull secret so pods can pull the private frontend image
+  oc create secret docker-registry jfrog-pull -n "$ns" \
+    --docker-server=globe.jfrog.io \
+    --docker-username="$JFROG_PULL_USER" \
+    --docker-password="$JFROG_PULL_TOKEN" 2>/dev/null || true
+  oc secrets link default jfrog-pull --for=pull -n "$ns"
 done
 ```
 
 - The **label** is what lets Argo CD deploy into the namespace.
-- The **`mysql-credentials`** secret is created out-of-band (not in Git), one per namespace.
+- **`mysql-credentials`** and **`jfrog-pull`** are created out-of-band (not in
+  Git), one per namespace.
+- Linking `jfrog-pull` to the **`default`** service account (`--for=pull`) means
+  every pod in the namespace pulls the private frontend image with it — no
+  manifest change. Without it the frontend pod fails with
+  `unable to retrieve auth token: … Authentication is required`.
+
+> Verify: `oc get sa default -n three-tier-user1 -o jsonpath='{.imagePullSecrets}'`
+> should list `jfrog-pull`.
 
 ### 0.4 · Create the 6 user branches
 
