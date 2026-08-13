@@ -29,7 +29,7 @@ spec:
     metadata:
       name: "three-tier-dev-{{.user}}"
     spec:
-      project: three-tier
+      project: three-tier-lab
       source:
         repoURL: "https://gitlab.com/globetelecom/platforms/ntg-redhat-capability-development-program/Applications/three-tier-lab.git"
         targetRevision: "feature/{{.user}}"          # each user's long-lived branch

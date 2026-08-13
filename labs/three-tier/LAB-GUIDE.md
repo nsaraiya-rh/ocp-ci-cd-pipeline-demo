@@ -377,7 +377,7 @@ Instructor teardown:
 ```bash
 oc delete applicationset three-tier-dev -n openshift-gitops
 oc delete application three-tier-prod -n openshift-gitops
-oc delete appproject three-tier -n openshift-gitops
+oc delete appproject three-tier-lab -n openshift-gitops
 oc delete namespace three-tier-user1 three-tier-user2 three-tier-user3 \
                     three-tier-user4 three-tier-user5 three-tier-user6 three-tier-prod
 ```
@@ -402,7 +402,7 @@ GitOps lab. They're **not** in `gitops/base`; add them deliberately if needed:
 
 | Symptom | Fix |
 |---|---|
-| Dev app `ComparisonError: … project three-tier does not exist` | Apply `three-tier-project.yaml` first |
+| Dev app `ComparisonError: … project three-tier-lab does not exist` | Apply `three-tier-project.yaml` first |
 | Pods `CreateContainerConfigError` on secret | `mysql-credentials` missing in that namespace — re-run 0.3 for it |
 | `mysql-0` Pending | No default StorageClass — set `storageClassName` in `mysql.yaml` (0.2) |
 | Argo can't deploy to a namespace (`forbidden`) | Namespace missing the `argocd.argoproj.io/managed-by=openshift-gitops` label (0.3) |

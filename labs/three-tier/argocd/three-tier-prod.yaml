@@ -10,7 +10,7 @@ metadata:
   name: three-tier-prod
   namespace: openshift-gitops
 spec:
-  project: three-tier
+  project: three-tier-lab
   source:
     repoURL: "https://gitlab.com/globetelecom/platforms/ntg-redhat-capability-development-program/Applications/three-tier-lab.git"
     targetRevision: main

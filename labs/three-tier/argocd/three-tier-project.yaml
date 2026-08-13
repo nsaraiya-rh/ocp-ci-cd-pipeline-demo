@@ -4,7 +4,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
-  name: three-tier
+  name: three-tier-lab
   namespace: openshift-gitops
 spec:
   description: Three-tier hands-on lab — per-user dev namespaces + shared prod.
