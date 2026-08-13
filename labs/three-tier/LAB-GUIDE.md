@@ -244,6 +244,7 @@ The frontend is built by CI, so the lab GitLab project needs:
    | `JFROG_TOKEN` | your CI push token | **off** | **on** | build (feature) |
    | `GITOPS_PUSH_TOKEN` | Project Access Token, `write_repository` (step 2b) | **off** | **on** | deploy-dev (feature) + promote-prod (main) |
    | `GIT_BOT_EMAIL` | the bot's `project_<id>_bot_<hash>@noreply.gitlab.com` | **off** | off | deploy-dev (feature) + promote-prod (main) |
+   | `GIT_BOT_NAME` | the bot user's account **name** (display name) | **off** | off | deploy-dev (feature) + promote-prod (main) |
 
    > **ALL of these MUST have "Protect variable" OFF.** `build` **and**
    > `deploy-dev` run on unprotected **`feature/userN`** branches (only
@@ -267,6 +268,14 @@ The frontend is built by CI, so the lab GitLab project needs:
    > **required** with `GITOPS_PUSH_TOKEN` (the bot's commit must carry a verified
    > email). Find the bot's username under **Project → Members** and append
    > `@noreply.gitlab.com`.
+   >
+   > **GitLab enforcing "commit author name consistent with GitLab account"?**
+   > Then `GIT_BOT_NAME` is **required** — the commit author name must equal the
+   > **bot account's name**, since the push authenticates as the bot. Get it from
+   > the bot member's `name` field (`.../members/all`); if the rule compares the
+   > username instead, use `project_<id>_bot_<hash>`. Symptom when unset:
+   > `Your git author name is inconsistent with GitLab account name`
+   > (`pre-receive hook declined`).
 
 2. **Push-back — pick one:**
 
@@ -506,6 +515,7 @@ GitOps lab. They're **not** in `gitops/base`; add them deliberately if needed:
 | Dev app `ComparisonError: … project three-tier-lab does not exist` | Apply `three-tier-project.yaml` first |
 | Build log `Building //three-tier-frontend…` / `Invalid auth configuration file` | `JFROG_*` vars are **empty** — they have "Protect variable" ON but the build runs on an unprotected `feature/*` branch. Turn **Protect OFF** on the four `JFROG_*` vars (0.7) |
 | `deploy-dev` push `403 You are not allowed to push code` | `GITOPS_PUSH_TOKEN` is **empty** on the feature branch (Protect ON) so it fell back to `CI_JOB_TOKEN`. Turn **Protect OFF** on `GITOPS_PUSH_TOKEN` + `GIT_BOT_EMAIL`, and confirm the bot user is a project member (0.7) |
+| `deploy-dev` push `Your git author name is inconsistent with GitLab account name` (`pre-receive hook declined`) | Author-name push rule + the commit is authored as the triggering user, not the bot. Set `GIT_BOT_NAME` to the bot account's name (0.7) |
 | Frontend `ImagePullBackOff: … Authentication is required` | `jfrog-pull` secret missing / not linked to the `default` SA in that namespace — re-run 0.3 |
 | Push fails `src refspec feature/userN does not match any` | You're on `main`, not your branch — `git fetch origin && git checkout feature/$U`; also check `echo "U=[$U]"` |
 | Pods `CreateContainerConfigError` on secret | `mysql-credentials` missing in that namespace — re-run 0.3 for it |
