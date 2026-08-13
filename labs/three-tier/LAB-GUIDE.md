@@ -236,15 +236,26 @@ oc apply -f argocd/three-tier-prod.yaml          # shared prod Application
 The frontend is built by CI, so the lab GitLab project needs:
 
 1. **CI/CD variables** (Settings → CI/CD → Variables):
-   | Key | Value | Masked | When |
-   |---|---|---|---|
-   | `JFROG_URL` | `globe.jfrog.io` | no | always |
-   | `JFROG_REPO` | `ntg-capdv-docker-local` | no | always |
-   | `JFROG_USER` | your CI push user | no | always |
-   | `JFROG_TOKEN` | your CI push token | **yes** | always |
-   | `GITOPS_PUSH_TOKEN` | Project Access Token, `write_repository` (step 2b) | **yes** | strict `main` |
-   | `GIT_BOT_EMAIL` | the bot's `project_<id>_bot_<hash>@noreply.gitlab.com` | no | strict `main` + verified-committer rule |
+   | Key | Value | Protect | Mask | Used by |
+   |---|---|---|---|---|
+   | `JFROG_URL` | `globe.jfrog.io` | **off** | off | build (feature branches) |
+   | `JFROG_REPO` | `ntg-capdv-docker-local` | **off** | off | build (feature branches) |
+   | `JFROG_USER` | your CI push user | **off** | off | build (feature branches) |
+   | `JFROG_TOKEN` | your CI push token | **off** | **on** | build (feature branches) |
+   | `GITOPS_PUSH_TOKEN` | Project Access Token, `write_repository` (step 2b) | on | **on** | `promote-prod` (`main`) |
+   | `GIT_BOT_EMAIL` | the bot's `project_<id>_bot_<hash>@noreply.gitlab.com` | on | off | `promote-prod` (`main`) |
 
+   > **The four `JFROG_*` vars MUST have "Protect variable" OFF.** The build runs
+   > on **`feature/userN`** branches, which are **not protected** — GitLab only
+   > injects *protected* variables into jobs on protected branches. If they're
+   > protected, they arrive **empty**, and the build tries
+   > `Building //three-tier-frontend…` → pushes to `index.docker.io` →
+   > `Invalid auth configuration file`. Masking is fine (it only hides the value
+   > in logs); it's *Protect* that gates by branch.
+   >
+   > `GITOPS_PUSH_TOKEN`/`GIT_BOT_EMAIL` may stay **protected** — they're only
+   > used by `promote-prod`, which runs on `main` (protected).
+   >
    > `JFROG_URL`/`JFROG_REPO` **must match** the `newName` in
    > `gitops/overlays/{dev,prod}/kustomization.yaml`
    > (`${JFROG_URL}/${JFROG_REPO}/three-tier-frontend`).
@@ -488,7 +499,11 @@ GitOps lab. They're **not** in `gitops/base`; add them deliberately if needed:
 
 | Symptom | Fix |
 |---|---|
+| Dev app `Unknown` / `ComparisonError: … HTTP Basic: Access denied` | Argo can't read the private repo — add the repo credential Secret (0.5), then hard-refresh the apps |
 | Dev app `ComparisonError: … project three-tier-lab does not exist` | Apply `three-tier-project.yaml` first |
+| Build log `Building //three-tier-frontend…` / `Invalid auth configuration file` | `JFROG_*` vars are **empty** — they have "Protect variable" ON but the build runs on an unprotected `feature/*` branch. Turn **Protect OFF** on the four `JFROG_*` vars (0.7) |
+| Frontend `ImagePullBackOff: … Authentication is required` | `jfrog-pull` secret missing / not linked to the `default` SA in that namespace — re-run 0.3 |
+| Push fails `src refspec feature/userN does not match any` | You're on `main`, not your branch — `git fetch origin && git checkout feature/$U`; also check `echo "U=[$U]"` |
 | Pods `CreateContainerConfigError` on secret | `mysql-credentials` missing in that namespace — re-run 0.3 for it |
 | `mysql-0` Pending | No default StorageClass — set `storageClassName` in `mysql.yaml` (0.2) |
 | Argo can't deploy to a namespace (`forbidden`) | Namespace missing the `argocd.argoproj.io/managed-by=openshift-gitops` label (0.3) |
