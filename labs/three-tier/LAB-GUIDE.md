@@ -84,7 +84,7 @@ open MR feature/userN → main ─► approve ─► merge ─► promote-prod c
 - **A GitLab runner** for the lab project that can build with Kaniko — egress to
   **`gcr.io`** (Kaniko image), **`registry.access.redhat.com`**, **JFrog**, and GitLab.
 - **JFrog** — a Docker repo the CI can push the frontend image to, plus the CI
-  push token (see Part 0.6).
+  push token (see Part 0.7).
 - Cluster egress to pull images: **`docker.io`** (node, adminer), **`registry.redhat.io`**
   (MySQL), and **JFrog** (the built frontend), with the cluster's Red Hat pull
   secret in place (present by default on OpenShift).
@@ -114,7 +114,7 @@ git add -A && git commit -m "seed: three-tier lab" && git push -u origin main
 ```
 
 The Argo manifests in `argocd/` are **already pre-filled** with this repo URL,
-so step 0.5's `sed` is a no-op — apply them as-is.
+so step 0.6's `sed` is a no-op — apply them as-is.
 
 ### 0.2 · Check the cluster has a default StorageClass
 
@@ -160,7 +160,37 @@ done
 > follow the convention for consistency. (The sample-app preview pipeline is the
 > one that actually enforces `branchMatch` via its SCM branch generator.)
 
-### 0.5 · Wire Argo CD
+### 0.5 · Register the repo credential in Argo CD
+
+The lab repo is **private**, so Argo CD needs a **read** credential to clone it
+and generate manifests. Without this, every Application shows `Unknown` with
+`ComparisonError: … authentication required: HTTP Basic: Access denied`.
+
+1. GitLab → **Project → Settings → Access Tokens**: role **Reporter**, scope
+   **`read_repository`**; copy the value.
+2. Register it as an Argo CD repository Secret (the `url` **must match** the
+   `repoURL` in `argocd/*.yaml` exactly):
+
+   ```bash
+   oc apply -n openshift-gitops -f - <<EOF
+   apiVersion: v1
+   kind: Secret
+   metadata:
+     name: three-tier-lab-repo
+     labels:
+       argocd.argoproj.io/secret-type: repository
+   stringData:
+     type: git
+     url: ${LAB_REPO_URL}
+     username: gitlab-ci-token
+     password: <READ_REPO_TOKEN>
+   EOF
+   ```
+
+   > `username` can be any non-empty string when authenticating with a token
+   > (`gitlab-ci-token` is conventional); the token goes in `password`.
+
+### 0.6 · Wire Argo CD
 
 The manifests in `argocd/` are **pre-filled with the repo URL**, so just apply
 them — **project first**:
@@ -176,7 +206,7 @@ oc apply -f argocd/three-tier-prod.yaml          # shared prod Application
 > `sed -i '' "s|__LAB_REPO_URL__|${LAB_REPO_URL}|g" argocd/*.yaml`
 > (Linux/GNU sed: drop the `''`.)
 
-### 0.6 · Configure CI on the lab project (for the frontend build)
+### 0.7 · Configure CI on the lab project (for the frontend build)
 
 The frontend is built by CI, so the lab GitLab project needs:
 
@@ -233,13 +263,19 @@ The frontend is built by CI, so the lab GitLab project needs:
 3. **Runner** — a GitLab runner that can reach **`gcr.io`** (the Kaniko image),
    `registry.access.redhat.com`, JFrog, and GitLab.
 
-### 0.7 · Confirm
+### 0.8 · Confirm
 
 ```bash
 oc get applications -n openshift-gitops | grep three-tier
 # three-tier-dev-user1 … user6  → Synced/Healthy into their namespaces
 # three-tier-prod               → Synced/Healthy into three-tier-prod
 ```
+
+> Apps stuck on `Unknown` with `ComparisonError: … authentication required:
+> HTTP Basic: Access denied`? Argo can't read the private repo — the repo
+> credential from **0.5** is missing or its token is wrong/expired. Fix it, then
+> `oc annotate applications.argoproj.io -n openshift-gitops <app>
+> argocd.argoproj.io/refresh=hard --overwrite`.
 
 The frontend pods start on `:initial` (no build yet) and go green once the first
 build runs. Hand each user their **username** (`user1`…`user6`) and the
