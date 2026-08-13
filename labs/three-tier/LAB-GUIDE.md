@@ -215,8 +215,20 @@ The frontend is built by CI, so the lab GitLab project needs:
      *Maintainers* (merge).
    - **If your GitLab enforces "reject unverified users"** (committer email must
      be verified): the bot push fails unless the committer is the bot's email.
-     Set CI variable **`GIT_BOT_EMAIL`** = the bot's `@noreply` email (from
-     Project → Members) — the pipeline uses it when set.
+     Set CI variable **`GIT_BOT_EMAIL`** = the bot's `@noreply` email — the
+     pipeline uses it when set.
+
+     > **Finding `GIT_BOT_EMAIL`.** GitLab auto-creates a bot user
+     > `project_<id>_bot_<hash>` when you make the token. Its verified email is
+     > always `<that-username>@noreply.gitlab.com` — you just need the username:
+     > - **UI:** Project → **Manage → Members** → find the `project_<id>_bot_…`
+     >   row → append `@noreply.gitlab.com`.
+     > - **API:** `curl -s --header "PRIVATE-TOKEN: <token>"
+     >   "https://gitlab.com/api/v4/projects/<PROJECT_ID>/members/all"` and pick
+     >   the member whose username contains `bot`.
+     >
+     > `<PROJECT_ID>` is the numeric **Project ID** shown on the project's
+     > overview page. Example value: `project_12345_bot_ab12cd@noreply.gitlab.com`.
 
 3. **Runner** — a GitLab runner that can reach **`gcr.io`** (the Kaniko image),
    `registry.access.redhat.com`, JFrog, and GitLab.
