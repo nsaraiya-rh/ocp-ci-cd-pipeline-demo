@@ -343,8 +343,17 @@ Clone the lab repo and switch to **your** branch:
 
 ```bash
 git clone ${LAB_REPO_URL} three-tier-lab && cd three-tier-lab
-git checkout feature/$U
+git fetch origin                       # make sure your branch is known locally
+git checkout feature/$U                # creates a local tracking branch
 ```
+
+> **`error: src refspec feature/userN does not match any`** on push means you
+> have no local branch by that name — you're still on `main`. Run
+> `git fetch origin && git checkout feature/$U` first. Already cloned earlier?
+> Just `cd three-tier-lab && git fetch origin && git checkout feature/$U`.
+> If the branch doesn't exist on the remote at all, the instructor missed 0.4 —
+> create it: `git checkout -b feature/$U origin/main && git push -u origin feature/$U`.
+> Also confirm `$U` is set: `echo "U=[$U]"` (empty → `feature/` fails too).
 
 Edit the frontend **source** — the `<h1>` in **`app/frontend/index.html`** — to
 include your name, e.g.:
