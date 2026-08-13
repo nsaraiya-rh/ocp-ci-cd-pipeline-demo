@@ -65,6 +65,18 @@ open MR feature/userN → main ─► approve ─► merge ─► promote-prod c
   ```bash
   git ls-remote <LAB_REPO_URL>     # should list refs, not prompt-fail
   ```
+- **Git identity matching your GitLab account** — this GitLab enforces push rules
+  that reject commits whose **author name** or **email** don't match your account.
+  Set them once per clone (Full name from **Edit profile**; a **verified** email
+  from **Profile → Emails**):
+  ```bash
+  git config user.name  "Your GitLab Full Name"   # or your username
+  git config user.email "you@verified-email"      # must be verified on GitLab
+  ```
+  Symptom if unset: `Your git author name is inconsistent with GitLab account name`
+  / `committer email … is not verified` (`pre-receive hook declined`). Already
+  committed with the wrong identity? Re-stamp it:
+  `git commit --amend --reset-author --no-edit`.
 - **Network reachability** — your workstation needs to reach the cluster API
   (`:6443`), the app Routes (`:443`), and GitLab (`:443`/`:22`).
 
@@ -554,6 +566,7 @@ GitOps lab. They're **not** in `gitops/base`; add them deliberately if needed:
 | `deploy-dev` push `Your git author name is inconsistent with GitLab account name` (`pre-receive hook declined`) | Author-name push rule + the commit is authored as the triggering user, not the bot. Set `GIT_BOT_NAME` to the bot account's name (0.7) |
 | Frontend `ImagePullBackOff: … Authentication is required` | `jfrog-pull` secret missing / not linked to the `default` SA in that namespace — re-run 0.3 |
 | Push fails `src refspec feature/userN does not match any` | You're on `main`, not your branch — `git fetch origin && git checkout feature/$U`; also check `echo "U=[$U]"` |
+| **Your** push rejected `Your git author name is inconsistent with GitLab account name` / `committer email … is not verified` | Your local git identity doesn't match your GitLab account. `git config user.name "<GitLab full name or username>"` and `git config user.email "<verified email>"`, then `git commit --amend --reset-author --no-edit` and push (Prerequisites) |
 | `promote-prod` logs `Promoting … initial` then fails | The dev overlay tag on `main` is still `initial` — no tested build reached `main`. Do a real build on `feature/$U` first, then merge (guard is intentional: never promote a non-existent image) |
 | After merge: dev app stops, branch shows `upstream is gone`, tag back to `initial` | The MR merge **deleted the source branch**. Re-create it, but **uncheck "Delete source branch"** on future merges — `feature/$U` is long-lived (Argo tracks it). Then rebuild to restore the real tag |
 | Pods `CreateContainerConfigError` on secret | `mysql-credentials` missing in that namespace — re-run 0.3 for it |
