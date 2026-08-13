@@ -421,8 +421,13 @@ In GitLab, open an MR from **`feature/$U` → `main`**:
 - **Merge requests → New merge request**, source `feature/userN`, target `main`, Create.
 - Assign a **peer** as reviewer.
 
-Your reviewer opens the MR, looks at the diff (your ConfigMap change), and
-**Approves**. (Approval is the quality gate — it does not deploy anything yet.)
+Your reviewer opens the MR, looks at the diff (your `index.html` change **plus**
+the `deploy-dev` tag bump in `gitops/overlays/dev`), and **Approves**. (Approval
+is the quality gate — it does not deploy anything yet.)
+
+> **Before you continue working locally**, pull the commit `deploy-dev` pushed to
+> your branch, or your next push will be based on a stale tree:
+> `git pull origin feature/$U`.
 
 > **Prod is shared.** Coordinate so users merge **one at a time**. If someone
 > merged before you and you edited the same line, GitLab will show a conflict —
@@ -436,9 +441,18 @@ Your reviewer opens the MR, looks at the diff (your ConfigMap change), and
 
 # Part 4 — Merge → prod deploys automatically
 
-When it's your turn, **Merge** the MR (as a merge commit). That puts your change
-on `main`, and the **`three-tier-prod`** Argo CD Application deploys it to the
-shared prod namespace:
+When it's your turn, **Merge** the MR (as a merge commit).
+
+> ⚠️ **UNCHECK "Delete source branch" before merging.** Your `feature/$U` branch
+> is **long-lived** — Argo CD's dev Application tracks it. If the merge deletes it,
+> your dev app loses its branch and stops syncing; recreating it from `main`
+> brings back `newTag: "initial"` (main's dev overlay is never promoted), so the
+> frontend falls back to `ImagePullBackOff` and `promote-prod` aborts with
+> `Promoting … initial`. Keep the branch.
+
+Merging puts your change on `main`, which carries your tested dev tag into `main`;
+`promote-prod` then copies that tag into the prod overlay, and the
+**`three-tier-prod`** Argo CD Application deploys it to the shared prod namespace:
 
 ```bash
 oc get application three-tier-prod -n openshift-gitops \
@@ -520,6 +534,8 @@ GitOps lab. They're **not** in `gitops/base`; add them deliberately if needed:
 | `deploy-dev` push `Your git author name is inconsistent with GitLab account name` (`pre-receive hook declined`) | Author-name push rule + the commit is authored as the triggering user, not the bot. Set `GIT_BOT_NAME` to the bot account's name (0.7) |
 | Frontend `ImagePullBackOff: … Authentication is required` | `jfrog-pull` secret missing / not linked to the `default` SA in that namespace — re-run 0.3 |
 | Push fails `src refspec feature/userN does not match any` | You're on `main`, not your branch — `git fetch origin && git checkout feature/$U`; also check `echo "U=[$U]"` |
+| `promote-prod` logs `Promoting … initial` then fails | The dev overlay tag on `main` is still `initial` — no tested build reached `main`. Do a real build on `feature/$U` first, then merge (guard is intentional: never promote a non-existent image) |
+| After merge: dev app stops, branch shows `upstream is gone`, tag back to `initial` | The MR merge **deleted the source branch**. Re-create it, but **uncheck "Delete source branch"** on future merges — `feature/$U` is long-lived (Argo tracks it). Then rebuild to restore the real tag |
 | Pods `CreateContainerConfigError` on secret | `mysql-credentials` missing in that namespace — re-run 0.3 for it |
 | `mysql-0` Pending | No default StorageClass — set `storageClassName` in `mysql.yaml` (0.2) |
 | Argo can't deploy to a namespace (`forbidden`) | Namespace missing the `argocd.argoproj.io/managed-by=openshift-gitops` label (0.3) |
