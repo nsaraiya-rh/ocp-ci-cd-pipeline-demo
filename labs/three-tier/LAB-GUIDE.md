@@ -397,7 +397,8 @@ git push origin feature/$U
 **Watch the CI pipeline** (Build → Pipelines in GitLab, or the CLI): `build-image`
 (Kaniko) builds your frontend image and pushes it to JFrog `:<sha>`; then
 `deploy-dev` writes that tag into `gitops/overlays/dev` on **your** branch and
-pushes a `[skip ci]` commit.
+pushes a `dev: deploy frontend <sha>` commit. (That bot commit re-triggers a
+pipeline, but the build/deploy jobs skip their own commits — no rebuild loop.)
 
 Now **Argo CD** deploys the built image to **your** namespace (~1–2 min):
 

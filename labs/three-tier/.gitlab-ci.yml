@@ -24,10 +24,11 @@ stages:
 variables:
   IMAGE: "${JFROG_URL}/${JFROG_REPO}/three-tier-frontend"
 
+# Loop-prevention is done per-job (see the `bot commit` rules below), NOT with a
+# global [skip ci] — a global skip would also skip promote-prod when a branch that
+# contains a bot "dev: deploy" commit is merged into main.
 workflow:
   rules:
-    - if: '$CI_COMMIT_MESSAGE =~ /\[skip ci\]/'
-      when: never
     - if: '$CI_COMMIT_BRANCH'
 
 build-image:
@@ -36,6 +37,8 @@ build-image:
     name: gcr.io/kaniko-project/executor:v1.23.2-debug
     entrypoint: [""]
   rules:
+    - if: '$CI_COMMIT_MESSAGE =~ /^(dev: deploy|prod: promote) frontend/'   # bot commit — never rebuild
+      when: never
     - if: '$CI_COMMIT_BRANCH != "main"'
       changes: [ 'app/frontend/**', '.gitlab-ci.yml' ]
   script:
@@ -49,6 +52,8 @@ deploy-dev:
   stage: deploy-dev
   image: registry.access.redhat.com/ubi9/ubi:latest
   rules:
+    - if: '$CI_COMMIT_MESSAGE =~ /^(dev: deploy|prod: promote) frontend/'   # bot commit — never re-deploy
+      when: never
     - if: '$CI_COMMIT_BRANCH != "main"'
       changes: [ 'app/frontend/**', '.gitlab-ci.yml' ]
   script:
@@ -65,13 +70,18 @@ deploy-dev:
     - 'git remote set-url origin "${REMOTE}"'
     - 'git add gitops/overlays/dev/kustomization.yaml'
     - 'git diff --cached --quiet && echo "dev already at ${CI_COMMIT_SHORT_SHA}" && exit 0 || true'
-    - 'git commit -m "dev: deploy frontend ${CI_COMMIT_SHORT_SHA} [skip ci]"'
+    # No [skip ci]: the bot commit only touches gitops/overlays/dev, and the job
+    # rules above ignore "dev: deploy" commits — so no rebuild loop, yet the commit
+    # still promotes normally when the branch is merged into main.
+    - 'git commit -m "dev: deploy frontend ${CI_COMMIT_SHORT_SHA}"'
     - 'git push origin HEAD:${CI_COMMIT_REF_NAME}'
 
 promote-prod:
   stage: promote-prod
   image: registry.access.redhat.com/ubi9/ubi:latest
   rules:
+    - if: '$CI_COMMIT_MESSAGE =~ /^prod: promote frontend/'   # bot's own promote commit — never re-promote
+      when: never
     - if: '$CI_COMMIT_BRANCH == "main"'
       changes: [ 'app/frontend/**', 'gitops/**' ]
   script:
@@ -90,5 +100,7 @@ promote-prod:
     - 'git remote set-url origin "${REMOTE}"'
     - 'git add gitops/overlays/prod/kustomization.yaml'
     - 'git diff --cached --quiet && echo "prod already at ${DEV_TAG}" && exit 0 || true'
-    - 'git commit -m "prod: promote frontend ${DEV_TAG} [skip ci]"'
+    # No [skip ci]: the promote commit re-triggers a main pipeline, but the job
+    # rule above ignores "prod: promote" commits — so it runs exactly once.
+    - 'git commit -m "prod: promote frontend ${DEV_TAG}"'
     - 'git push origin HEAD:main'
